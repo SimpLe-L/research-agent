@@ -1,0 +1,21 @@
+{
+  "name": "@sp-agent/agent-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/agent-runtime/src/index.js",
+  "types": "dist/agent-runtime/src/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.80.3",
+    "@sp-agent/shared": "workspace:*",
+    "typebox": "1.1.38"
+  }
+}

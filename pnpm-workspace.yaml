@@ -1,0 +1,8 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+  - "workers/*"
+allowBuilds:
+  '@nestjs/core': set this to true or false
+  electron: set this to true or false
+  esbuild: set this to true or false

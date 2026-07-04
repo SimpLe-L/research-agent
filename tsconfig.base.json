@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "declaration": true,
+    "sourceMap": true,
+    "baseUrl": ".",
+    "paths": {
+      "@sp-agent/shared": ["packages/shared/src/index.ts"],
+      "@sp-agent/research-core": ["packages/research-core/src/index.ts"],
+      "@sp-agent/database": ["packages/database/src/index.ts"],
+      "@sp-agent/agent-runtime": ["packages/agent-runtime/src/index.ts"],
+      "@sp-agent/data-connectors": ["packages/data-connectors/src/index.ts"],
+      "@sp-agent/extensions": ["packages/extensions/src/index.ts"]
+    }
+  }
+}

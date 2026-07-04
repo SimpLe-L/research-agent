@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: sp-agent-postgres
+    environment:
+      POSTGRES_USER: sp_agent
+      POSTGRES_PASSWORD: sp_agent
+      POSTGRES_DB: sp_agent
+    ports:
+      - "54329:5432"
+    volumes:
+      - sp_agent_postgres:/var/lib/postgresql/data
+
+volumes:
+  sp_agent_postgres:
+

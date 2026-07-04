@@ -1,0 +1,13 @@
+node_modules
+.pnpm-store/
+.electron-cache/
+dist/
+apps/*/dist/
+packages/*/dist/
+
+# Local secrets and runtime state
+.env
+**/.data/
+
+# OS/editor noise
+.DS_Store
