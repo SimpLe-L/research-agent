@@ -6,6 +6,34 @@ The target product is a local-first personal Agent OS. The first version is a de
 
 The product is not a trading bot, wallet automation tool, social posting bot, Web3 workbench, or unrestricted coding/browser agent. Old Web3/research files have been removed from the active project.
 
+## OpenClaw-Style Expansion Boundary
+
+The current codebase is a viable v0 agent shell, not yet a full autonomous personal-assistant platform. It should grow toward an OpenClaw-style local assistant through controlled app-owned primitives instead of broad model-owned system access.
+
+The expansion target is:
+
+```text
+desktop chat shell
+-> local gateway and approval queue
+-> runtime adapter registry
+-> installed extension manifests and handlers
+-> app-owned memory and audit log
+-> workflow runner for multi-step skills
+-> connectors for personal services
+-> optional companion surfaces such as mobile or messaging
+```
+
+The product should avoid copying the riskiest shape of autonomous assistants: unrestricted filesystem, shell, browser, posting, wallet, or account access. Every new capability should enter through the extension registry, declare permissions, expose typed input/output, and return an invocation audit.
+
+OpenClaw-style parity should mean:
+
+- Agents can inspect available skills and request allowed capabilities.
+- Write, paid-provider, external-posting, destructive, or sensitive-account actions require explicit approval.
+- Long-running tasks are observable, resumable, cancellable, and auditable.
+- Personal memory can be searched, promoted, updated, merged, forgotten, and traced back to source.
+- Runtimes are replaceable; Pi remains the default adapter, not the architecture itself.
+- Skills can host internal workflows such as LangGraph without becoming a second control plane.
+
 ## Active Runtime
 
 ```text

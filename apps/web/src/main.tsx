@@ -686,9 +686,15 @@ function AssistantComposer() {
               Base Agent
               <ChevronDown size={16} />
             </DropdownMenuTrigger>
-            <DropdownMenuContent className="w-44">
-              <DropdownMenuItem>Base Agent</DropdownMenuItem>
-              <DropdownMenuItem data-disabled>Pi Runtime</DropdownMenuItem>
+            <DropdownMenuContent align="start" sideOffset={8} className="modelMenuContent">
+              <DropdownMenuItem className="modelMenuItem selected">
+                <span>Base Agent</span>
+                <Check size={15} />
+              </DropdownMenuItem>
+              <DropdownMenuItem className="modelMenuItem disabled" data-disabled>
+                <span>Pi Runtime</span>
+                <span className="modelMenuMeta">planned</span>
+              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
           <span className="composerSpacer" />

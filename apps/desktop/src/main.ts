@@ -88,6 +88,16 @@ async function createWindow() {
     }
   });
 
+  win.webContents.on("before-input-event", (event, input) => {
+    const isDevToolsShortcut =
+      input.key === "F12" ||
+      (input.key.toLowerCase() === "i" && input.alt && (input.meta || input.control));
+
+    if (!isDevToolsShortcut) return;
+    event.preventDefault();
+    win.webContents.toggleDevTools();
+  });
+
   if (rendererUrl && (await isRendererReachable(rendererUrl))) {
     await win.loadURL(rendererUrl);
     return;

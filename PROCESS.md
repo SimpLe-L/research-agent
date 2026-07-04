@@ -85,6 +85,7 @@ Complete when:
 - Frontend agent turns use assistant-ui `LocalRuntime` with a `ChatModelAdapter` that calls `/api/agent/messages`.
 - Frontend thread history uses a thread-scoped assistant-ui `ThreadHistoryAdapter` that loads persisted API session messages.
 - Frontend styling now has Tailwind CSS v4 and shadcn/base UI initialized in `apps/web`, with shadcn `button`, `sheet`, `tooltip`, and `dropdown-menu` components available.
+- Tailwind CSS v4 now maps shadcn theme tokens through `@theme inline`, so shadcn/base UI popovers, dropdowns, sheets, and tooltips generate the expected background, foreground, border, ring, and radius utilities.
 - The assistant-ui shell now includes real desktop sidebar collapse, mobile sheet navigation, dynamic thread title, model dropdown shell, scroll-to-bottom control, basic message actions, and two-level welcome suggestions that can send prompts through the assistant-ui runtime.
 - `PATCH /api/chat/sessions/:id` updates session titles for assistant-ui thread rename/title generation.
 - `POST /api/agent/messages` persists both user and assistant messages to the chat session.
@@ -96,6 +97,7 @@ Complete when:
 - `pnpm smoke:api:pi-live` verifies the Nest API can call Pi/SiliconFlow and persist the live conversation.
 - Browser-level built web verification passes against the live API: the page shows `Base ready`, sends a message, and renders a Pi response.
 - Electron desktop issues found during GUI smoke were fixed: the shell no longer auto-loads a stale `127.0.0.1:5173` dev server, and the API child process now uses a real Node executable instead of Electron's Node mode so Pi SDK can load.
+- Electron desktop registers DevTools shortcuts on the renderer window: `F12` and `Cmd/Ctrl+Option/Alt+I` toggle DevTools for local debugging.
 - Electron GUI smoke now passes: `pnpm --filter @sp-agent/desktop start` opens the built assistant-ui Base screen, shows `Base ready`, exposes `pi` plus the extension count, sends a chat message, and renders a Pi/SiliconFlow response.
 - `local.context` is the first non-voice read-only skill behind the extension boundary; `pnpm smoke:api:extensions` verifies registry, invocation, and permission audit.
 - `pnpm smoke:desktop:preflight` protects Electron startup invariants without needing GUI approval.
@@ -108,6 +110,46 @@ Complete when:
 2. Runtime adapter contract is Pi-first; additional adapters are not implemented yet.
 3. Skill/workflow layer only has the minimal read-only `local.context` skill; no graph-backed workflow exists yet.
 4. Speech is intentionally last; current UI keeps only a disabled mic slot.
+
+## OpenClaw-Style Optimization Direction
+
+The current repository should be treated as a working v0 shell, not a complete OpenClaw-class personal assistant. The next development goal is to keep the safer local-first boundary while adding the primitives needed for a more autonomous, extensible assistant.
+
+### Current Strengths To Preserve
+
+- Keep the local API gateway as the only control plane for runtime calls, persistence, permissions, extension invocation, and audit.
+- Keep Pi as the default runtime adapter, but keep all privileged behavior behind app-owned tools and extension capabilities.
+- Keep Pi built-in shell, file, edit, write, browser, wallet, and posting tools disabled.
+- Keep chat sessions and memory owned by the app, not by prompt-only runtime state.
+- Keep degraded states visible when providers, keys, tools, or workflows are unavailable.
+
+### Highest Priority Gaps
+
+1. Runtime adapter registry: extract a real `RuntimeAdapter` contract so Pi is the default implementation rather than the only shape in the type system.
+2. Extension handler registry: replace hard-coded `if id/capability` invocation with registered handlers tied to manifests, permission metadata, schemas, and degraded behavior.
+3. Approval queue: add a first-class approval request path for write/provider/destructive/external actions. The model can request these actions, but the API and user approval must execute them.
+4. Memory v2: add promote, update, merge, forget audit, source conflict handling, and stronger ranking. Keep write candidates separate from durable accepted facts.
+5. Workflow runner: add long-running skill execution with status, timestamps, cancellation, retry, degraded reason, and observable node events.
+6. First real personal skill: add one useful non-voice personal skill behind the extension boundary before adding broad system control. Good candidates are local project knowledge, calendar/read-only schedule, file index search, or clipboard/text summarization.
+7. Connector boundary: add personal-service connectors only after approval and audit exist. Email, calendar, files, browser, and messaging should start read-only before any write/post/send actions.
+
+### Non-Goals For The Next Phase
+
+- Do not add unrestricted local computer control as a shortcut to capability breadth.
+- Do not let LangGraph, Pi, or any future runtime bypass the local API gateway.
+- Do not auto-write durable identity facts, preferences, project facts, files, posts, or external-account changes without an auditable policy.
+- Do not start speech implementation before runtime adapters, memory v2, approval, and at least one real non-voice skill are stable.
+
+### OpenClaw-Class Acceptance Bar
+
+The product can be considered on a credible OpenClaw-style path when:
+
+- The user can install or enable multiple typed skills without editing the agent runtime.
+- The agent can discover skills, call read-only skills, and request approval for higher-risk actions.
+- A long-running task can survive API restart or expose a truthful degraded reason if persistence is not ready.
+- Memory search, promotion, update, merge, and deletion are visible and reversible enough for daily personal use.
+- At least one connector-backed skill works end to end through the extension boundary with permission audit.
+- The desktop shell remains the primary surface, while future mobile or messaging companion surfaces call the same local gateway instead of duplicating agent logic.
 
 ## Roadmap
 
