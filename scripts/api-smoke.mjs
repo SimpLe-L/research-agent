@@ -1,86 +1,79 @@
-import {
-  cancelResearchTask,
-  createResearchTask,
-  deleteReportAnnotation,
-  deleteReportVector,
-  getResearchReport,
-  getResearchTask,
-  listReportAnnotations,
-  reindexKnowledgeReport,
-  upsertReportAnnotation
-} from "./smoke-extension-client.mjs";
+import { spawn } from "node:child_process";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-const apiBase = process.env.SMOKE_API_BASE ?? "http://localhost:4317/api";
-const timeoutMs = Number(process.env.SMOKE_TIMEOUT_MS ?? 180000);
-const pollIntervalMs = Number(process.env.SMOKE_POLL_INTERVAL_MS ?? 500);
+const port = Number(process.env.SMOKE_API_PORT ?? 4391);
+const base = process.env.SMOKE_API_BASE ?? `http://127.0.0.1:${port}/api`;
+const timeoutMs = Number(process.env.SMOKE_TIMEOUT_MS ?? 30000);
+let apiProcess;
+const dataDir = await mkdtemp(join(tmpdir(), "sp-agent-api-smoke-"));
 
 async function main() {
-  await assertOk(`${apiBase}/health`, "health");
-  await waitForQueueIdle();
+  if (!process.env.SMOKE_API_BASE) {
+    apiProcess = spawn("node", ["apps/api/dist/apps/api/src/main.js"], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        PORT: String(port),
+        SP_AGENT_DATA_DIR: dataDir,
+        SILICONFLOW_API_KEY: "",
+        PI_API_KEY: ""
+      },
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    apiProcess.stdout.on("data", (chunk) => process.stdout.write(`[api] ${chunk}`));
+    apiProcess.stderr.on("data", (chunk) => process.stderr.write(`[api] ${chunk}`));
+  }
 
-  const queue = await readJson(`${apiBase}/research/queue`);
-  assert(queue.mode === "in_memory", `expected in_memory queue mode, got ${queue.mode}`);
-  const retentionPreview = await readJson(`${apiBase}/settings/retention/preview?days=365`);
-  assert(typeof retentionPreview.databaseReachable === "boolean", "expected retention preview to expose databaseReachable");
-  assert(typeof retentionPreview.counts?.researchTasks === "number", "expected retention preview task count");
-  const retentionDryRun = await postJson(`${apiBase}/settings/retention/prune`, { days: 365, dryRun: true });
-  assert(retentionDryRun.dryRun === true, "expected retention prune smoke to run as dry-run");
+  await waitForHealth();
+  const health = await readJson(`${base}/health`);
+  assert(health.ok === true, "expected health ok");
 
-  const completedTask = await createTask("API_SMOKE_COMPLETE");
-  assert(completedTask.task.status === "pending", `expected new task status pending, got ${completedTask.task.status}`);
-  const finalTask = await waitForTask(completedTask.task.id);
-  assert(finalTask.status === "completed", `expected task completed, got ${finalTask.status}`);
-  const report = await getResearchReport(apiBase, completedTask.task.id);
-  const reindexed = await reindexKnowledgeReport(apiBase, report.id);
-  assert(reindexed.reportId === report.id, "expected report-specific reindex to return the report id");
-  assert(
-    reindexed.indexed === true || typeof reindexed.degradedReason === "string",
-    "expected report-specific reindex to either index or return a degraded reason"
-  );
-  const vectorDeleted = await deleteReportVector(apiBase, report.id);
-  assert(vectorDeleted.reportId === report.id, "expected vector delete to return the report id");
-  assert(typeof vectorDeleted.deleted === "boolean", "expected vector delete to return a boolean deleted flag");
-  const annotation = await upsertReportAnnotation(apiBase, report.id, {
-    tags: ["api-smoke", "manual-case"],
-    note: "API smoke annotation",
-    confidence: 77
+  const providers = await readJson(`${base}/providers/status`);
+  assert(Array.isArray(providers.providers), "expected providers array");
+  assert(providers.providers.some((provider) => provider.name === "agent-runtime"), "expected agent-runtime provider");
+
+  const readiness = await readJson(`${base}/settings/readiness`);
+  assert(Array.isArray(readiness.items), "expected readiness items");
+  assert(readiness.items.some((item) => item.id === "pi-runtime"), "expected pi-runtime readiness item");
+  assert(readiness.items.some((item) => item.id === "memory-layer" && item.status === "ready"), "expected ready memory layer");
+
+  const extensions = await readJson(`${base}/extensions`);
+  assert(Array.isArray(extensions.extensions), "expected extension registry");
+  assert(extensions.extensions.some((extension) => extension.id === "core.agent-shell"), "expected core.agent-shell extension");
+  assert(extensions.extensions.some((extension) => extension.id === "local.memory" && extension.status === "active"), "expected active local.memory extension");
+  assert(!extensions.extensions.some((extension) => extension.id === "web3.research"), "web3.research should not be active");
+
+  const agentStatus = await readJson(`${base}/agent/status`);
+  assert(agentStatus.mode === "local_personal_agent", "expected local personal agent mode");
+
+  const session = await postJson(`${base}/chat/sessions`, { title: "API smoke" });
+  assert(session.id, "expected created chat session id");
+
+  const turn = await postJson(`${base}/agent/messages`, {
+    content: "当前项目状态是什么？",
+    sessionId: session.id
   });
-  assert(annotation.reportId === report.id, "expected annotation to return the report id");
-  assert(annotation.tags.includes("api-smoke"), "expected annotation tags to include api-smoke");
-  const annotations = await listReportAnnotations(apiBase, report.id);
-  assert(
-    annotations.annotations.some((item) => item.id === annotation.id),
-    "expected saved annotation to be listed"
-  );
-  const annotationDeleted = await deleteReportAnnotation(apiBase, report.id, annotation.id);
-  assert(annotationDeleted.deleted === true, "expected annotation delete to return deleted=true");
+  assert(turn.role === "assistant", "expected assistant response");
+  assert(turn.sessionId === session.id, "expected agent turn to use requested chat session");
+  assert(typeof turn.content === "string" && turn.content.length > 0, "expected assistant content");
+  assert(turn.degradedReason, "expected missing-key degraded reason in smoke env");
 
-  const cancelTaskCount = Math.max(Number(queue.concurrency ?? 2) + 2, 4);
-  const cancelTasks = await Promise.all(
-    Array.from({ length: cancelTaskCount }, (_, index) => createTask(`API_SMOKE_CANCEL_${index + 1}`))
-  );
-  const queuedBeforeCancel = await readJson(`${apiBase}/research/queue`);
-  const pendingTaskId = cancelTasks.find((item) => queuedBeforeCancel.pendingTaskIds.includes(item.task.id))?.task.id;
-  assert(pendingTaskId, "expected at least one pending task before cancel");
-  assert(
-    queuedBeforeCancel.pendingTaskIds.includes(pendingTaskId),
-    `expected ${pendingTaskId} to be pending before cancel`
-  );
-  const cancelled = await cancelResearchTask(apiBase, pendingTaskId);
-  assert(cancelled.cancelled === true, "expected pending cancel response to be cancelled");
-  assert(cancelled.task.status === "cancelled", `expected cancelled task status, got ${cancelled.task.status}`);
-  const queuedAfterCancel = await readJson(`${apiBase}/research/queue`);
-  assert(!queuedAfterCancel.pendingTaskIds.includes(pendingTaskId), `expected ${pendingTaskId} to be removed from queue`);
-  await waitForQueueIdle();
+  const savedSession = await readJson(`${base}/chat/sessions/${session.id}`);
+  assert(savedSession.messages?.length === 2, "expected user and assistant messages to persist");
+  assert(savedSession.messages[0].role === "user", "expected persisted user message");
+  assert(savedSession.messages[1].role === "assistant", "expected persisted assistant message");
 
+  await stopApi();
   console.log(
     JSON.stringify(
       {
         ok: true,
-        apiBase,
-        completedTaskId: completedTask.task.id,
-        cancelledPendingTaskId: pendingTaskId,
-        queueMode: queue.mode
+        base,
+        extensionIds: extensions.extensions.map((extension) => extension.id),
+        providerCount: providers.providers.length,
+        degradedReason: turn.degradedReason
       },
       null,
       2
@@ -88,37 +81,18 @@ async function main() {
   );
 }
 
-async function createTask(input) {
-  return createResearchTask(apiBase, {
-    input,
-    inputType: "symbol",
-    question: "API smoke",
-    options: {
-      includeOnchain: false,
-      includeSocial: false,
-      includeSimilarCases: true
+async function waitForHealth() {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    try {
+      const health = await readJson(`${base}/health`);
+      if (health.ok) return;
+    } catch {
+      // keep polling while API starts
     }
-  });
-}
-
-async function waitForTask(taskId) {
-  const started = Date.now();
-  while (Date.now() - started < timeoutMs) {
-    const task = await getResearchTask(apiBase, taskId);
-    if (["completed", "failed", "cancelled"].includes(task.status)) return task;
-    await sleep(pollIntervalMs);
+    await sleep(250);
   }
-  throw new Error(`Timed out waiting for task ${taskId}`);
-}
-
-async function waitForQueueIdle() {
-  const started = Date.now();
-  while (Date.now() - started < timeoutMs) {
-    const queue = await readJson(`${apiBase}/research/queue`);
-    if (queue.pending === 0 && queue.running === 0) return;
-    await sleep(pollIntervalMs);
-  }
-  throw new Error("Timed out waiting for research queue to become idle");
+  throw new Error(`Timed out waiting for ${base}/health`);
 }
 
 async function readJson(url) {
@@ -130,16 +104,31 @@ async function readJson(url) {
 async function postJson(url, body) {
   const response = await fetch(url, {
     method: "POST",
-    headers: body ? { "content-type": "application/json" } : undefined,
-    body: body ? JSON.stringify(body) : undefined
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body)
   });
-  assert(response.ok, `${url} returned HTTP ${response.status}`);
-  return response.json();
+  const data = await response.json();
+  assert(response.ok, `${url} returned HTTP ${response.status}: ${data.message ?? "unknown error"}`);
+  return data;
 }
 
-async function assertOk(url, label) {
-  const response = await fetch(url);
-  assert(response.ok, `${label} returned HTTP ${response.status}`);
+async function stopApi() {
+  if (!apiProcess || apiProcess.exitCode !== null || apiProcess.signalCode) return;
+  apiProcess.kill("SIGINT");
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      apiProcess.kill("SIGKILL");
+      reject(new Error("Timed out stopping API process"));
+    }, 5000);
+    apiProcess.once("exit", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
+
+async function cleanupDataDir() {
+  await rm(dataDir, { recursive: true, force: true });
 }
 
 function assert(condition, message) {
@@ -150,7 +139,17 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-main().catch((error) => {
+process.on("exit", () => {
+  if (apiProcess && apiProcess.exitCode === null && !apiProcess.signalCode) {
+    apiProcess.kill("SIGKILL");
+  }
+});
+
+main().catch(async (error) => {
+  await stopApi().catch(() => undefined);
+  await cleanupDataDir().catch(() => undefined);
   console.error(error);
   process.exit(1);
+}).finally(async () => {
+  await cleanupDataDir().catch(() => undefined);
 });

@@ -8,8 +8,12 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "../../..");
 const apiPort = Number(process.env.PORT ?? 4317);
 const apiBaseUrl = process.env.API_BASE_URL ?? `http://localhost:${apiPort}/api`;
-const rendererUrl = process.env.RENDERER_URL ?? (app.isPackaged ? undefined : "http://127.0.0.1:5173");
+const rendererUrl = process.env.RENDERER_URL;
 let apiProcess: ChildProcess | undefined;
+
+function nodeEntryPoint(): string {
+  return process.env.NODE_BINARY || process.env.npm_node_execpath || "node";
+}
 
 function apiEntryPoint(): string | undefined {
   const candidates = [
@@ -49,11 +53,10 @@ async function ensureApiProcess(): Promise<void> {
     throw new Error("API build output was not found. Run `pnpm --filter @sp-agent/api build` before launching desktop.");
   }
 
-  apiProcess = spawn(process.execPath, [apiMain], {
+  apiProcess = spawn(nodeEntryPoint(), [apiMain], {
     cwd: repoRoot,
     env: {
       ...process.env,
-      ELECTRON_RUN_AS_NODE: "1",
       PORT: String(apiPort)
     },
     stdio: "inherit"
@@ -74,8 +77,10 @@ async function createWindow() {
   await ensureApiProcess();
 
   const win = new BrowserWindow({
-    width: 1440,
-    height: 920,
+    width: 1120,
+    height: 760,
+    minWidth: 960,
+    minHeight: 640,
     title: "SP Agent",
     webPreferences: {
       contextIsolation: true,

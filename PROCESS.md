@@ -2,160 +2,215 @@
 
 ## Current Project State
 
-The product direction has been corrected. The first stage is now a local-first personal agent prototype, not a Web3 research workbench as the only product surface. The intended core loop is:
+The active product is now a local-first personal Agent OS base. Old Web3/research workbench code has been removed from the active project.
+
+The active core loop is:
 
 ```text
 Electron shell
+-> assistant-ui runtime/primitives chat
 -> Local API Gateway
--> Pi runtime base
--> permissioned app tools
--> extensions / skills
+-> runtime adapter, initially Pi
+-> permissioned extension registry
+-> memory, skills, workflows
+-> speech last
 ```
 
-The existing Web3 research loop now works as an extension-owned capability:
+Active workspace packages:
 
-```text
-Token address / symbol / project input
--> persisted research task
--> queue or worker execution
--> observable task-node events
--> Markdown research report
--> persisted report/source/task history
--> Knowledge search and optional LanceDB vector indexing
--> Web/Electron workbench display
-```
+- `apps/api`
+- `apps/web`
+- `apps/desktop`
+- `packages/shared`
+- `packages/extensions`
+- `packages/agent-runtime`
 
-The current gap is not a missing UI automation layer or another provider adapter. The main remaining work is to finish the personal agent shell pivot, then migrate existing research/market/report/knowledge paths behind explicit extensions/skills.
+Detached reference code should not be restored into the active workspace unless it supports a new explicit personal-agent skill.
 
 ## Definition Of Complete
 
-Phase 1 should be considered complete when these conditions are true:
+### v0.1 Personal Agent Base
 
-- Electron can launch the local API/renderer loop for normal desktop use.
-- `GET /api/agent/status` exposes the local personal-agent mode, Pi runtime readiness, safety policy, and extension registry.
-- `POST /api/agent/messages` can run a local personal-agent turn through Pi when configured and deterministic degraded output when not configured.
-- Built-in Pi shell/file/edit/write tools remain disabled for the product path.
-- Web3 research, market, reports, and knowledge are visible as extensions/skills, not the root product identity.
-- Existing code is not deleted until the new extension path is verified.
+Complete when:
 
-The broader v0.x research capability should be considered complete when these conditions are true:
+- Electron launches the local API and renderer reliably for normal local use.
+- The first screen is a simple assistant-ui runtime-backed chat surface.
+- Chat sessions work locally and persist across API restarts.
+- `GET /api/agent/status` exposes mode, runtime readiness, safety policy, extension registry, and degraded reasons.
+- `POST /api/agent/messages` can run a personal-agent turn through the selected runtime when configured and a deterministic degraded response when not configured.
+- Pi is the default runtime adapter, but `packages/agent-runtime` does not hard-code the whole architecture to Pi.
+- Built-in Pi shell/file/edit/write/browser tools remain disabled.
+- Extension/skill invocations are typed, permissioned, observable, and return `permissionAudit`.
+- Old Web3/research routes, packages, registry entries, and smokes are detached from active development.
 
-- A user can provide a token contract address or symbol and receive an evidence-backed Markdown report without manual intervention.
-- The report is persisted and automatically becomes available to the local knowledge base / RAG search.
-- Missing provider data is always shown as a degraded reason; the app never invents market, chain, social, holder, or source data.
-- With real credentials configured, market data, EVM reads, embeddings, Pi runtime synthesis, holder concentration, and Arkham-compatible address intelligence can be verified through smoke scripts.
-- The app can run in the default local API mode, and the API-only plus worker mode remains available when PostgreSQL is reachable.
-- Electron can launch the local API/renderer loop for normal desktop use.
+### v0.2 Memory Base
+
+Complete when:
+
+- A memory service exists for durable app-owned memory.
+- Memory supports text search, source/provenance metadata, write candidates, and forget/tombstone behavior.
+- The agent can retrieve relevant memory through a read-only memory tool.
+- Durable memory writes are auditable and classified separately from read-only agent tools.
+
+### v0.3 Skill And Workflow Base
+
+Complete when:
+
+- At least one non-voice personal-agent skill exists behind the extension boundary.
+- The skill can be invoked through the API with permission audit.
+- If LangGraph is introduced, it is wrapped inside the skill and does not bypass API-owned permissions, memory, or provider readiness.
+- Skill execution has focused API smoke coverage.
+
+### v0.4 Voice Base
+
+Complete when:
+
+- A speech package/service exists with STT and TTS provider adapters.
+- The renderer can do half-duplex voice chat: record -> transcript -> agent message -> TTS audio -> playback.
+- Raw audio is not persisted by default.
+- Transcript/TTS/provider failures produce visible degraded reasons.
+- Voice uses the same agent/session/memory/skill path as typed chat.
 
 ## Implemented
 
-- Monorepo: `apps/api`, `apps/web`, `apps/desktop`, `packages/shared`, `packages/research-core`, `packages/database`, `packages/data-connectors`, `packages/agent-runtime`.
-- Refactor contract: root `AGENT_SHELL_REFACTOR.md` defines the Electron + Local API Gateway + Pi + extensions target, migration phases, and no-delete-until-verified rule.
-- Extension registry: `packages/extensions` now declares `core.agent-shell`, `web3.research`, `web3.market`, `local.knowledge`, and `local.reports` with phase/status/capability/permission metadata.
-- Agent shell API: `GET /api/agent/status` returns `mode=local_personal_agent`, Pi runtime status, safety policy, and extension registry. `POST /api/agent/messages` runs one personal-agent turn through Pi when configured, with deterministic degraded output when not configured.
-- Agent research session API: `POST /api/agent/research-sessions` starts a Pi-coordinated research session through the local API, records `agent_research_session_started` with the planned app-tool sequence, and keeps the deterministic research task graph as the fallback/audit backbone. Migrated node tools now include `resolve_research_asset`, `collect_research_sources`, `fetch_research_market_data`, `fetch_research_onchain_data`, `analyze_research_risk`, `search_research_knowledge`, `write_research_report`, and `index_research_knowledge`.
-- Extension API: `GET /api/extensions`, `GET /api/extensions/:id`, and `POST /api/extensions/:id/invoke` provide the unified extension surface. Adapters support `web3.research` task/event/report operations, `web3.market` snapshots, `local.knowledge` search/index/source/vector operations, and `local.reports` report/source/annotation operations. Invocation results include `permissionAudit` metadata with `mode=read_only|write_or_provider`. Invocations that create or read task/report state append `extension_invoked` events to the relevant research task event stream. `pnpm smoke:api:extensions` verifies extension -> research task -> report -> local reports -> knowledge search plus the audit modes/events.
-- Pi personal-agent turn: `packages/agent-runtime` now supports a generic shell turn using `inspect_extension_registry` and `invoke_extension_capability` as app-specific tools while keeping built-in shell/file/edit/write tools disabled. The API agent shell only permits read-only/search extension invocations through this Pi tool path.
-- Renderer pivot: `/chat` now renders the local personal agent shell with Pi status, agent conversation, and extension registry. Legacy research execution moved back to the `Research Skill` route and no longer dominates the first screen.
-- API: health, provider status/verify, readiness/retention, extension invoke, extension-owned research SSE, queue status, chat sessions, agent research sessions, watchlist CRUD.
-- Research task graph: asset resolution, source collection, market data, on-chain data, risk analysis, historical-case matching, report writing, validation, and knowledge indexing.
-- Persistence: PostgreSQL-backed tasks, events, reports, report annotations, source documents, market snapshots, and watchlist items, with memory fallback where appropriate.
-- Queue/runtime: default in-process queue, PostgreSQL atomic claim before execution, pending requeue on startup, interrupted-running recovery, and separate `RESEARCH_TASK_EXECUTOR_MODE=api_only` plus `pnpm start:worker:research` worker path. PostgreSQL-backed worker verification now includes both normal research tasks and `/api/agent/research-sessions` tasks.
-- Provider boundaries: Pi Agent runtime, SiliconFlow model provider, EVM RPC, CoinGecko, DefiLlama, DEX Screener, Arkham-compatible templates, holder-provider templates, and LanceDB embeddings all degrade explicitly when unavailable.
-- Pi default runtime has been restored in `.env`, `.env.example`, `agent-runtime`, Settings readiness, and handoff docs. Pi now registers read-only app research tools (`inspect_research_context`, `inspect_deterministic_report`) during report synthesis while keeping built-in Pi file/shell/edit tools disabled. Pi drafting returns a concise Markdown body; deterministic summary/recommendation/confidence plus the complete source/degraded appendix remain authoritative. `pnpm smoke:agent-runtime:pi`, `PI_LIVE_SMOKE=1 pnpm smoke:agent-runtime:pi`, `SMOKE_API_BASE=http://localhost:4393/api pnpm smoke:api:pi-runtime`, and `SMOKE_API_BASE=http://localhost:4395/api pnpm smoke:api:pi-research-rag` passed with `siliconflow/deepseek-ai/DeepSeek-V4-Flash`. The current post-node-migration verification also passed on the default local API port with `pnpm --config.verify-deps-before-run=false typecheck`, `pnpm --config.verify-deps-before-run=false build`, `pnpm --config.verify-deps-before-run=false smoke:api:extensions`, `pnpm --config.verify-deps-before-run=false smoke:api:pi-runtime`, and `pnpm --config.verify-deps-before-run=false smoke:api:pi-research-rag`. With Docker PostgreSQL reachable, `pnpm --config.verify-deps-before-run=false smoke:api:worker`, `pnpm --config.verify-deps-before-run=false smoke:api:agent-worker`, and `pnpm --config.verify-deps-before-run=false smoke:api:pending-requeue` passed.
-- CoinGecko v0.x path uses the keyless public API by default and is covered by `pnpm smoke:api:coingecko-public`.
-- Knowledge/RAG: reports are stored, source documents are linked, global and per-report vector indexing is available, and search can use SQL plus LanceDB when embeddings are configured. `pnpm smoke:research-rag` verifies token input -> report generation -> persistence -> knowledge search -> source linkage -> vector indexing/degraded reason.
-- UI: Chat, Research, Market, Knowledge, Watchlist, Reports, and Settings views are routed with TanStack Router. Research, Market, Knowledge, and Reports panels are extension workspace surfaces backed by extension-owned API calls while preserving stable `data-testid` anchors.
-- Desktop: Electron can launch the compiled API and load the renderer, with static-build fallback when Vite is not running.
-- Phase 5 cleanup: the duplicate direct research, market, and knowledge HTTP controllers were removed after scripts/UI migrated to extension invoke. `GET /api/research/queue` remains as an operational queue visibility endpoint for local/API-only/worker mode.
-- Post-cleanup docs/code hygiene: obsolete root `design.md` was removed; extension manifests now mark `web3.research`, `web3.market`, `local.knowledge`, and `local.reports` as active extension surfaces instead of legacy modules; Electron startup and a plain `/api/agent/messages` conversation were verified without creating a research task.
+- Active workspace narrowed to API, web, desktop, shared contracts, extensions, and agent-runtime.
+- Renderer first screen is assistant-ui runtime-backed chat on `/` and `/chat`.
+- Default frontend chat calls `/api/agent/messages`; it no longer creates research tasks.
+- API gateway exposes health, provider status, settings readiness, chat sessions, agent status/messages, and extension registry/invoke.
+- Extension registry exposes `core.agent-shell`, active `local.memory`, active `local.context`, and planned `local.speech`.
+- `web3.research`, `web3.market`, report, knowledge, watchlist, queue, and worker routes are no longer active.
+- Web3/research source packages, API modules, web components, and smoke scripts were deleted from the active checkout.
+- Chat sessions persist to local JSON.
+- Frontend thread list is backed by API chat sessions through assistant-ui `RemoteThreadListRuntime` and `ThreadListPrimitive`.
+- Frontend agent turns use assistant-ui `LocalRuntime` with a `ChatModelAdapter` that calls `/api/agent/messages`.
+- Frontend thread history uses a thread-scoped assistant-ui `ThreadHistoryAdapter` that loads persisted API session messages.
+- Frontend styling now has Tailwind CSS v4 and shadcn/base UI initialized in `apps/web`, with shadcn `button`, `sheet`, `tooltip`, and `dropdown-menu` components available.
+- The assistant-ui shell now includes real desktop sidebar collapse, mobile sheet navigation, dynamic thread title, model dropdown shell, scroll-to-bottom control, basic message actions, and two-level welcome suggestions that can send prompts through the assistant-ui runtime.
+- `PATCH /api/chat/sessions/:id` updates session titles for assistant-ui thread rename/title generation.
+- `POST /api/agent/messages` persists both user and assistant messages to the chat session.
+- `local.memory` is active with local JSON-backed write candidates, search, source/provenance metadata, and tombstone deletion.
+- `packages/shared` now contains only generic agent/chat/settings/extension contracts.
+- `packages/agent-runtime` now contains only generic Pi personal-agent turn behavior and runtime readiness.
+- `pnpm smoke:api` validates the active gateway and asserts `web3.research` is not registered.
+- `.env` contains a SiliconFlow key and live Pi runtime verification passes.
+- `pnpm smoke:api:pi-live` verifies the Nest API can call Pi/SiliconFlow and persist the live conversation.
+- Browser-level built web verification passes against the live API: the page shows `Base ready`, sends a message, and renders a Pi response.
+- Electron desktop issues found during GUI smoke were fixed: the shell no longer auto-loads a stale `127.0.0.1:5173` dev server, and the API child process now uses a real Node executable instead of Electron's Node mode so Pi SDK can load.
+- Electron GUI smoke now passes: `pnpm --filter @sp-agent/desktop start` opens the built assistant-ui Base screen, shows `Base ready`, exposes `pi` plus the extension count, sends a chat message, and renders a Pi/SiliconFlow response.
+- `local.context` is the first non-voice read-only skill behind the extension boundary; `pnpm smoke:api:extensions` verifies registry, invocation, and permission audit.
+- `pnpm smoke:desktop:preflight` protects Electron startup invariants without needing GUI approval.
+- `pnpm smoke:desktop:api-child` verifies the same Node child-process strategy Electron uses can load the Pi SDK and read the extension registry.
+- The renderer header shows the active extension count so the shell exposes extension capacity without adding a complex workbench UI.
 
-## Remaining Completion Gaps
+## Current Gaps
 
-### 1. Provider Credentials And Live Data Validation
+1. Memory update/merge/promotion policy is not implemented beyond write candidates and tombstones.
+2. Runtime adapter contract is Pi-first; additional adapters are not implemented yet.
+3. Skill/workflow layer only has the minimal read-only `local.context` skill; no graph-backed workflow exists yet.
+4. Speech is intentionally last; current UI keeps only a disabled mic slot.
 
-Status: blocking for full live-data confidence, not blocking for local degraded operation or the agent shell pivot.
+## Roadmap
 
-Needed:
+### Phase 1: Chat-First Shell
 
-- CoinGecko first version uses the free keyless public API at `https://api.coingecko.com/api/v3`; `pnpm smoke:api:coingecko-public` has verified provider reachability and BTC/ETH market analysis through this path.
-- Fill eligible holder-provider credentials, currently usually `HOLDER_CONCENTRATION_PROVIDER=etherscan` plus `ETHERSCAN_API_KEY`, and verify top-holder concentration for a supported token.
-- Fill `ARKHAM_*_URL_TEMPLATE` values that match the user's actual Arkham-compatible account/API shape.
-- Keep EVM RPC and SiliconFlow credentials valid, then rerun live-provider smoke after related changes.
+Status: verified and extended with API-backed thread sessions.
 
-Reason not complete:
+Delivered:
 
-Holder concentration and Arkham-compatible intelligence require user-owned keys, provider account permissions, and sometimes provider-specific endpoint templates. The project must not fake these values or hard-code unverified private endpoints. CoinGecko is intentionally keyless for v0.x, but the public API is rate-limited and can still degrade on network/rate-limit failures.
+- `/` and `/chat` render the assistant-ui runtime-backed shell.
+- First-screen chat calls `/api/agent/messages`.
+- Old workbench routes are removed from the active router.
+- Route smoke verifies only `/` and `/chat`.
+- Frontend thread list loads from `GET /api/chat/sessions`.
+- New Thread creates sessions through `POST /api/chat/sessions`.
+- Agent turns persist user and assistant messages into the selected session.
 
-### 2. External Worker Product Decision
+Latest verification:
 
-Status: functional today, product decision still open.
+- `pnpm typecheck`
+- `pnpm build`
+- `pnpm smoke:web:routes`
+- Browser visual check at desktop `1280x720` and mobile `390x844`: no missing core anchors and no horizontal overflow.
+- `pnpm --filter @sp-agent/web build`
+- `pnpm smoke:web:routes`
 
-Needed:
+### Phase 2: Minimal Agent Gateway
 
-- Decide whether the current PostgreSQL-polling worker is enough for v0.x local-first usage.
-- Only introduce BullMQ, pg-boss, or another dedicated queue backend if multi-worker scheduling, delayed jobs, retries, or stronger operational visibility become real requirements.
+Status: verified.
 
-Reason not complete:
+Delivered:
 
-The current worker boundary is already useful and verified. A heavier queue backend adds dependency and operational complexity, so it should be justified by actual product needs.
+- Active API no longer imports research/database/market/knowledge/watchlist services.
+- Active extension registry contains `core.agent-shell`, active `local.memory`, active `local.context`, and planned `local.speech`.
+- `pnpm smoke:api` starts the built API and verifies health, provider status, readiness, extensions, agent status, and degraded agent message behavior.
+- `pnpm smoke:api:pi-live` starts the built API with `.env` credentials and verifies a live Pi/SiliconFlow agent response.
+- Browser-level built web verification against the live API confirms the chat UI renders a Pi response.
+- Electron GUI smoke confirms the final desktop window state: built renderer loaded from `apps/web/dist`, status is `Base ready`, runtime is `pi`, extension count is visible, and a chat message renders a live Pi/SiliconFlow response.
 
-### 3. Provider-Specific Parsing Hardening
+Latest verification:
 
-Status: ongoing hardening after live keys/templates are available.
+- `pnpm typecheck`
+- `pnpm build`
+- `pnpm smoke:api`
+- `pnpm smoke:api:extensions`
+- `pnpm smoke:api:pi-live`
+- `pnpm smoke:desktop:preflight`
+- `pnpm smoke:desktop:api-child`
+- `pnpm smoke:agent-runtime`
+- `pnpm smoke:agent-runtime:pi`
+- `PI_LIVE_SMOKE=1 pnpm smoke:agent-runtime:pi`
 
-Needed:
+### Phase 3: Memory Layer
 
-- Validate CoinGecko asset resolution on ambiguous symbols.
-- Validate Arkham-compatible responses against real templates.
-- Validate holder-provider response parsing and concentration calculation on supported tokens.
-- Add fixture-based tests around provider response parsing once real response shapes are known.
+Status: partially implemented.
 
-Reason not complete:
+Deliverables:
 
-Without real provider responses and account permissions, parser hardening would be speculative.
+- Add app-owned memory schemas and service. Done.
+- Define memory entry, source/provenance, scope, confidence, and deletion/tombstone contracts. Done.
+- Add memory search and memory write-candidate APIs. Done.
+- Register implemented memory capabilities in `packages/extensions`. Done.
+- Expose memory search to the agent as a read-only tool first. Done through both extension invocation and deterministic retrieval context before the agent turn.
 
-### 4. Electron/Desktop Packaging Readiness
+Acceptance:
 
-Status: launch loop exists; packaging polish remains optional.
+- `pnpm smoke:api:memory`
+- Agent turn can retrieve memory without directly mutating it. Done for deterministic pre-prompt retrieval; mutation remains outside auto tool access.
 
-Needed:
+### Phase 4: Skill And Workflow Layer
 
-- Decide whether v0.x needs a packaged desktop app or only local `pnpm dev:desktop` / compiled launch.
-- If packaging is needed, add installer/build steps and a desktop smoke focused on API startup, renderer load, and persistent data location.
+Status: started with a minimal read-only skill.
 
-Reason not complete:
+Deliverables:
 
-The current local-first development loop works. Packaging is a distribution concern, not a blocker for research/RAG correctness.
+- Add one small non-voice personal-agent skill behind `packages/extensions`. Done with `local.context`.
+- Keep skill invocation typed, permissioned, and observable. Done for `context.snapshot`.
+- Add API smoke coverage for the skill. Done with `pnpm smoke:api:extensions`.
+- Add `packages/workflows` only if the skill genuinely needs graph orchestration.
+- If LangGraph is introduced, wrap it inside the skill capability and keep node events observable.
 
-## Optimization Backlog
+Acceptance:
 
-These are useful improvements but should not outrank the core research-to-RAG and live-provider validation work.
+- API smoke for the implemented skill.
+- Existing chat, memory, and runtime smokes still pass.
 
-1. Split remaining large renderer orchestration only where a stable feature boundary exists. Avoid splitting state prematurely just to reduce line count.
-2. Improve Knowledge UX around report/source reuse, degraded evidence filters, and manual annotations.
-3. Improve report quality prompts and deterministic appendix formatting after live provider data is verified.
-4. Add provider response fixtures for CoinGecko, holder concentration, and Arkham-compatible templates.
-5. Add retention/pruning confirmation UI only if destructive local cleanup becomes a regular workflow.
-6. Improve Settings readiness copy after the final provider list stabilizes.
-7. Revisit queue backend selection only if the local PostgreSQL worker model proves insufficient.
+### Phase 5: Speech Layer
 
-## Lowest Priority
+Last target.
 
-Browser-level click automation is intentionally lowest priority for this project right now.
+Deliverables:
 
-Reason:
+- Add `packages/speech` for STT/TTS provider contracts.
+- Add API voice session flow for half-duplex chat.
+- Add renderer record/transcribe/send/playback flow.
+- Add provider readiness for STT/TTS.
+- Keep raw audio persistence disabled by default.
 
-The product's critical path is API/worker/database/RAG behavior:
+Acceptance:
 
-```text
-input token
--> generate report
--> persist report and sources
--> index/search in knowledge base
-```
-
-That path should be verified primarily through API and worker smoke scripts, not through browser clicks. Browser automation is only worth adding later if UI interaction regressions become frequent or if the project needs CI coverage for full workbench click paths. Until then, keep `pnpm smoke:web:routes` as a lightweight route/bundle/test-marker check and use manual UI checks when changing navigation or layout.
+- `pnpm smoke:api:speech`
+- Text chat still works.
+- Renderer can complete record -> transcript -> agent -> playback with one provider or explicit degraded reason.
 
 ## Verification Commands
 
@@ -164,39 +219,40 @@ Run before handing off meaningful code changes:
 ```bash
 pnpm typecheck
 pnpm build
-```
-
-Core smokes:
-
-```bash
-SMOKE_API_BASE=http://localhost:<port>/api pnpm smoke:api
-pnpm smoke:api:chat
-pnpm smoke:api:worker
-pnpm smoke:api:agent-worker
-pnpm smoke:api:pending-requeue
+pnpm smoke:api
 pnpm smoke:api:extensions
-pnpm smoke:api:pi-research-rag
+pnpm smoke:api:memory
+pnpm smoke:desktop:preflight
+pnpm smoke:desktop:api-child
 pnpm smoke:web:routes
-pnpm smoke:research-rag
-```
-
-Live-provider smokes after `.env` is filled:
-
-```bash
-pnpm smoke:api:coingecko-public
-pnpm smoke:api:live-providers
 pnpm smoke:agent-runtime
 pnpm smoke:agent-runtime:pi
-PI_LIVE_SMOKE=1 pnpm smoke:agent-runtime:pi
-AGENT_RUNTIME_PROVIDER=pi PORT=4380 pnpm --filter @sp-agent/api start
-SMOKE_API_BASE=http://localhost:4380/api pnpm smoke:api:pi-runtime
-SMOKE_API_BASE=http://localhost:4380/api pnpm smoke:api:pi-research-rag
 ```
 
-Expected next engineering step:
+Live Pi check after `.env` has valid credentials:
 
 ```bash
-validate provider-specific parsing when real Arkham/holder-provider responses are available
+PI_LIVE_SMOKE=1 pnpm smoke:agent-runtime:pi
+pnpm smoke:api:pi-live
 ```
 
-The invoke contract, permission audit metadata, task event audit records, research-session entry, provider-fetch tools, risk-analysis tool, local knowledge search tool, report-writing tool, knowledge-indexing tool, and PostgreSQL-backed worker verification now exist. Phase 5 direct-route cleanup is complete: research, market, and knowledge direct controllers are removed, scripts/UI use extension-owned API surfaces, and queue visibility remains available through `/api/research/queue`.
+Future memory checks:
+
+```bash
+pnpm smoke:api:memory
+```
+
+Future speech checks:
+
+```bash
+pnpm smoke:api:speech
+```
+
+## Working Rules
+
+- Keep `PROCESS.md` focused on current state, gaps, roadmap, and verification. Do not turn it into a chronological log.
+- Keep `ARCHITECTURE.md` focused on product boundaries and package/runtime contracts.
+- Keep `AGENTS.md` as the instruction contract for future agents working in this repo.
+- Keep old Web3/research code detached from active imports, workspace builds, routes, smokes, and extension registry unless explicitly reintroduced.
+- Do not add unrestricted local computer-control powers to the personal agent.
+- Treat missing provider credentials and unavailable services as normal degraded product states.

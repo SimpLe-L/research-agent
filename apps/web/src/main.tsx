@@ -1,1113 +1,712 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
-  Link,
-  RouterProvider,
-  createRootRoute,
-  createRoute,
-  createRouter,
-  useNavigate,
-  useRouterState
-} from "@tanstack/react-router";
+  ActionBarPrimitive,
+  AssistantRuntimeProvider,
+  BranchPickerPrimitive,
+  ComposerPrimitive,
+  MessagePrimitive,
+  RuntimeAdapterProvider,
+  ThreadListItemPrimitive,
+  ThreadListPrimitive,
+  ThreadPrimitive,
+  fromThreadMessageLike,
+  useAui,
+  useAuiState,
+  useLocalRuntime,
+  useRemoteThreadListRuntime,
+  type AssistantState,
+  type ChatModelAdapter,
+  type RemoteThreadListAdapter,
+  type ThreadHistoryAdapter,
+  type ThreadMessage
+} from "@assistant-ui/react";
+import { RouterProvider, createRootRoute, createRoute, createRouter, useRouterState } from "@tanstack/react-router";
 import {
-  Activity,
+  ArrowDown,
+  ArrowUp,
+  BarChart3,
   Bot,
-  BookOpen,
-  FileText,
-  LineChart,
-  MessageSquare,
-  Puzzle,
-  Send,
-  Settings,
-  ShieldCheck,
-  Star
+  Check,
+  ChevronDown,
+  Code2,
+  Copy,
+  Lightbulb,
+  Menu,
+  Mic,
+  MoreHorizontal,
+  PanelLeft,
+  PenLine,
+  Plus,
+  RefreshCw,
+  Share,
+  Square,
+  Upload,
+  CloudSun
 } from "lucide-react";
-import { KnowledgeSearch, SourceDetail, type SourceDocument, type SourceDocumentDetail } from "./components/knowledge";
-import { MarketView, type MarketSnapshot } from "./components/market";
-import { readinessEnvTemplate, type ReadinessItem, type RetentionPreview } from "./components/readiness";
-import { QueueStatusPanel, TaskList, TaskProgress, type QueueStatus, type Task, type TaskEvent } from "./components/research";
-import { ReportPanel, type Report, type ReportAnnotation, type ReportSource } from "./components/report";
-import { ReportsView } from "./components/reports";
-import { SettingsView, type ProviderStatus } from "./components/settings";
-import { WatchlistView, type WatchlistEdit, type WatchlistItem } from "./components/watchlist";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger
+} from "@/components/ui/dropdown-menu";
+import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 import "./styles.css";
-
-type ViewKey = "chat" | "research" | "market" | "knowledge" | "watchlist" | "reports" | "settings";
-
-type ChatMessage = {
-  id: string;
-  role: "user" | "assistant" | "system" | "tool";
-  content: string;
-  metadata: Record<string, unknown>;
-  createdAt: string;
-};
-
-type ExtensionCapability = {
-  id: string;
-  label: string;
-  description: string;
-  permissions: string[];
-  inputSchema?: string;
-  outputSchema?: string;
-};
-
-type ExtensionManifest = {
-  id: string;
-  name: string;
-  description: string;
-  kind: "core" | "skill" | "connector" | "workflow";
-  phase: string;
-  status: "active" | "disabled" | "planned" | "degraded";
-  entrypoint?: string;
-  capabilities: ExtensionCapability[];
-  degradedReason?: string;
-};
-
-type AgentShellStatus = {
-  mode: "local_personal_agent";
-  piRuntime: {
-    provider?: string;
-    configured?: boolean;
-    reachable?: boolean;
-    sdkLoaded?: boolean;
-    selectedModelAvailable?: boolean;
-    degradedReason?: string;
-  };
-  safetyModel: {
-    defaultToolPolicy: "read_only";
-    disabledToolClasses: string[];
-    highRiskActions: string[];
-  };
-  extensions: ExtensionManifest[];
-};
-
-type ExtensionInvokeResponse<T> = {
-  extensionId: string;
-  capabilityId: string;
-  status: "accepted" | "queued" | "completed" | "degraded";
-  result?: T;
-  degradedReason?: string;
-};
 
 const apiBase = import.meta.env.VITE_API_BASE ?? "http://localhost:4317/api";
 
-const navItems: Array<{ key: ViewKey; label: string; icon: React.ComponentType<{ size?: number }> }> = [
-  { key: "chat", label: "Chat", icon: MessageSquare },
-  { key: "research", label: "Research", icon: Activity },
-  { key: "market", label: "Market", icon: LineChart },
-  { key: "knowledge", label: "Knowledge", icon: BookOpen },
-  { key: "watchlist", label: "Watchlist", icon: Star },
-  { key: "reports", label: "Reports", icon: FileText },
-  { key: "settings", label: "Settings", icon: Settings }
-];
-
-const viewRoutes = {
-  chat: "/chat",
-  research: "/research",
-  market: "/market",
-  knowledge: "/knowledge",
-  watchlist: "/watchlist",
-  reports: "/reports",
-  settings: "/settings"
-} as const satisfies Record<ViewKey, string>;
-
-const viewTitle: Record<ViewKey, { title: string; subtitle: string }> = {
-  chat: { title: "Agent", subtitle: "Local personal agent shell, Pi runtime, and extension registry" },
-  research: { title: "Research Skill", subtitle: "Legacy task graph progress, retry, cancellation, and generated report" },
-  market: { title: "Market", subtitle: "Major-asset regime snapshot with persisted analysis history" },
-  knowledge: { title: "Knowledge", subtitle: "Report search, source audit trail, and degraded evidence filters" },
-  watchlist: { title: "Watchlist", subtitle: "Tokens to revisit with notes, risk labels, and monitor rules" },
-  reports: { title: "Reports", subtitle: "Generated Markdown reports and linked source evidence" },
-  settings: { title: "Settings", subtitle: "Provider readiness, manual setup, and degraded runtime reasons" }
+type ProviderStatus = {
+  configured?: boolean;
+  reachable?: boolean;
+  degradedReason?: string;
 };
 
-function viewFromPathname(pathname: string): ViewKey {
-  const segment = pathname.split("/").filter(Boolean)[0];
-  return navItems.some((item) => item.key === segment) ? (segment as ViewKey) : "chat";
+type AgentStatus = {
+  mode: "local_personal_agent";
+  piRuntime?: ProviderStatus & {
+    provider?: string;
+    model?: string;
+    selectedModel?: string;
+  };
+  extensions?: Array<{ id: string; name: string; status: string }>;
+};
+
+type AgentMessageResponse = {
+  sessionId: string;
+  role: "assistant";
+  content: string;
+  provider: string;
+  model?: string;
+  degradedReason?: string;
+  activeTools?: string[];
+  toolCalls?: Array<Record<string, unknown>>;
+};
+
+type ThreadRecord = {
+  id: string;
+  title: string;
+  createdAt?: string;
+  updatedAt: string;
+  messages?: Array<{ id?: string; role: string; content: string; createdAt: string }>;
+};
+
+const suggestionGroups = [
+  {
+    label: "Weather",
+    icon: CloudSun,
+    options: [
+      { label: "in Shanghai", prompt: "What's the weather in Shanghai today?" },
+      { label: "in San Francisco", prompt: "What's the weather in San Francisco today?" },
+      { label: "weekend forecast", prompt: "Check the weekend forecast and summarize what matters." }
+    ]
+  },
+  {
+    label: "Code",
+    icon: Code2,
+    options: [
+      { label: "explain this error", prompt: "Help me explain and debug this error." },
+      { label: "review a component", prompt: "Review this React component and point out practical improvements." },
+      { label: "write TypeScript", prompt: "Write a concise TypeScript implementation for this task." }
+    ]
+  },
+  {
+    label: "Write",
+    icon: PenLine,
+    options: [
+      { label: "a PR description", prompt: "Write a clear pull request description for this change." },
+      { label: "release notes", prompt: "Draft release notes for a small product update." },
+      { label: "polish wording", prompt: "Polish this text while preserving the original meaning." }
+    ]
+  },
+  {
+    label: "Analyze",
+    icon: BarChart3,
+    options: [
+      { label: "tradeoffs", prompt: "Analyze the tradeoffs and give a recommended path." },
+      { label: "compare options", prompt: "Compare these options in a compact table." },
+      { label: "risk review", prompt: "Review the risks and missing information." }
+    ]
+  },
+  {
+    label: "Brainstorm",
+    icon: Lightbulb,
+    options: [
+      { label: "project ideas", prompt: "Brainstorm practical agent project ideas I could build." },
+      { label: "feature names", prompt: "Brainstorm concise names for this feature." },
+      { label: "next steps", prompt: "Brainstorm the next implementation steps." }
+    ]
+  }
+];
+
+function latestUserText(messages: readonly ThreadMessage[]): string {
+  const lastUser = [...messages].reverse().find((message) => message.role === "user");
+  const textParts = lastUser?.content.filter((part) => part.type === "text").map((part) => part.text) ?? [];
+  return textParts.join("\n").trim();
 }
 
-function AgentStatusPanel({
-  status,
-  providerStatus,
-  messageStatus,
-  onRefresh
-}: {
-  status: AgentShellStatus | null;
-  providerStatus: string;
-  messageStatus: string;
-  onRefresh: () => void;
-}) {
-  const pi = status?.piRuntime;
-  return (
-    <section className="panel agentStatusPanel" data-testid="agent-shell-panel">
-      <div className="panelHeader">
-        <h2>Local Agent Shell</h2>
-        <button className="smallAction" onClick={onRefresh}>Refresh</button>
-      </div>
-      <div className="agentIdentity">
-        <Bot size={22} />
-        <div>
-          <strong>{status?.mode ?? "local_personal_agent"}</strong>
-          <span>{pi?.provider ?? "pi"} runtime · {providerStatus}</span>
-        </div>
-      </div>
-      <dl className="agentFacts">
-        <div>
-          <dt>Pi configured</dt>
-          <dd>{pi?.configured ? "yes" : "no"}</dd>
-        </div>
-        <div>
-          <dt>SDK loaded</dt>
-          <dd>{pi?.sdkLoaded ? "yes" : "unknown"}</dd>
-        </div>
-        <div>
-          <dt>Model</dt>
-          <dd>{pi?.selectedModelAvailable ? "available" : "degraded"}</dd>
-        </div>
-        <div>
-          <dt>Last turn</dt>
-          <dd>{messageStatus || "idle"}</dd>
-        </div>
-      </dl>
-      {pi?.degradedReason && <p className="notice">{pi.degradedReason}</p>}
-      <div className="safetyBlock">
-        <div>
-          <ShieldCheck size={17} />
-          <strong>Safety policy</strong>
-        </div>
-        <p>Default tools are read-only. Shell, write, edit, wallet, transaction, posting, and unrestricted browser classes stay disabled.</p>
-      </div>
-    </section>
+function makeThreadTitle(content: string) {
+  const clean = content.replace(/\s+/g, " ").trim();
+  if (!clean) return "New Chat";
+  return clean.length > 24 ? `${clean.slice(0, 24)}...` : clean;
+}
+
+async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, init);
+  const data = (await res.json().catch(() => ({}))) as T & { message?: string };
+  if (!res.ok) throw new Error(data.message ?? `HTTP ${res.status}`);
+  return data;
+}
+
+function toThreadMetadata(thread: ThreadRecord) {
+  return {
+    status: "regular" as const,
+    remoteId: thread.id,
+    externalId: thread.id,
+    title: thread.title,
+    lastMessageAt: new Date(thread.updatedAt)
+  };
+}
+
+function toAssistantThreadMessage(message: NonNullable<ThreadRecord["messages"]>[number], index: number) {
+  if (message.role !== "user" && message.role !== "assistant" && message.role !== "system") return null;
+  return fromThreadMessageLike(
+    {
+      id: message.id ?? `api_msg_${index}`,
+      role: message.role,
+      content: message.content,
+      createdAt: new Date(message.createdAt),
+      status: message.role === "assistant" ? { type: "complete", reason: "stop" } : undefined,
+      metadata: { custom: { source: "api.chat.sessions" } }
+    },
+    message.id ?? `api_msg_${index}`,
+    { type: "complete", reason: "stop" }
   );
 }
 
-function ExtensionRegistryPanel({ extensions }: { extensions: ExtensionManifest[] }) {
-  return (
-    <section className="panel extensionPanel" data-testid="agent-extension-panel">
-      <div className="panelHeader">
-        <h2>Extensions</h2>
-        <span className="statusPill manual">{extensions.length || 0}</span>
-      </div>
-      <div className="extensionList">
-        {extensions.map((extension) => (
-          <article key={extension.id} className={`extensionItem ${extension.status}`}>
-            <div>
-              <Puzzle size={16} />
-              <strong>{extension.name}</strong>
-              <span className={`statusPill ${extension.status === "active" ? "ready" : "degraded"}`}>
-                {extension.status}
-              </span>
-            </div>
-            <p>{extension.description}</p>
-            <small>{extension.phase}{extension.entrypoint ? ` · ${extension.entrypoint}` : ""}</small>
-          </article>
-        ))}
-        {!extensions.length && <p className="empty">Extension registry unavailable.</p>}
-      </div>
-    </section>
-  );
+async function updateSessionTitle(sessionId: string, title: string) {
+  await fetchJson<ThreadRecord>(`${apiBase}/chat/sessions/${sessionId}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ title })
+  }).catch(() => undefined);
 }
+
+function createTitleStream(title: string): Awaited<ReturnType<RemoteThreadListAdapter["generateTitle"]>> {
+  return new ReadableStream({
+    start(controller) {
+      controller.enqueue({ type: "part-start", path: [0], part: { type: "text" } });
+      controller.enqueue({ type: "text-delta", path: [0], textDelta: title });
+      controller.enqueue({ type: "part-finish", path: [0] });
+      controller.enqueue({
+        type: "message-finish",
+        path: [],
+        finishReason: "stop",
+        usage: { inputTokens: 0, outputTokens: 0 }
+      });
+      controller.close();
+    }
+  }) as Awaited<ReturnType<RemoteThreadListAdapter["generateTitle"]>>;
+}
+
+function firstUserTitle(messages: readonly ThreadMessage[]) {
+  const firstUser = messages.find((message) => message.role === "user");
+  const text = firstUser?.content
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join(" ");
+  return makeThreadTitle(text ?? "");
+}
+
+function ThreadHistoryProvider({ children }: { children?: React.ReactNode }) {
+  const aui = useAui();
+  const history = useMemo<ThreadHistoryAdapter>(
+    () => ({
+      async load() {
+        const { remoteId } = aui.threadListItem().getState();
+        if (!remoteId) return { messages: [] };
+        const session = await fetchJson<ThreadRecord>(`${apiBase}/chat/sessions/${remoteId}`);
+        const messages = (session.messages ?? [])
+          .map(toAssistantThreadMessage)
+          .filter((message): message is ThreadMessage => Boolean(message));
+        return {
+          headId: messages.at(-1)?.id ?? null,
+          messages: messages.map((message, index) => ({
+            message,
+            parentId: index === 0 ? null : messages[index - 1]?.id ?? null
+          }))
+        };
+      },
+      async append() {
+        return;
+      },
+      async delete() {
+        return;
+      }
+    }),
+    [aui]
+  );
+  return <RuntimeAdapterProvider adapters={{ history }}>{children}</RuntimeAdapterProvider>;
+}
+
+const assistantThreadListAdapter: RemoteThreadListAdapter = {
+  async list() {
+    const data = await fetchJson<{ sessions: ThreadRecord[] }>(`${apiBase}/chat/sessions`);
+    return {
+      threads: data.sessions.map(toThreadMetadata)
+    };
+  },
+  async initialize() {
+    const thread = await fetchJson<ThreadRecord>(`${apiBase}/chat/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title: "New Chat" })
+    });
+    return { remoteId: thread.id, externalId: thread.id };
+  },
+  async rename(remoteId, newTitle) {
+    await updateSessionTitle(remoteId, newTitle);
+  },
+  async archive() {
+    return;
+  },
+  async unarchive() {
+    return;
+  },
+  async delete() {
+    return;
+  },
+  async fetch(threadId) {
+    const thread = await fetchJson<ThreadRecord>(`${apiBase}/chat/sessions/${threadId}`);
+    return toThreadMetadata(thread);
+  },
+  async generateTitle(remoteId, messages) {
+    const title = firstUserTitle(messages);
+    await updateSessionTitle(remoteId, title);
+    return createTitleStream(title);
+  },
+  unstable_Provider: ThreadHistoryProvider
+};
 
 function App() {
-  const navigate = useNavigate();
-  const activeView = useRouterState({
-    select: (state) => viewFromPathname(state.location.pathname)
-  });
-  const [agentInput, setAgentInput] = useState("现在这个本地 agent 架子有哪些 extensions？");
-  const [agentStatus, setAgentStatus] = useState<AgentShellStatus | null>(null);
-  const [agentMessageStatus, setAgentMessageStatus] = useState("");
-  const [input, setInput] = useState("0x0000000000000000000000000000000000000000");
-  const [watchNote, setWatchNote] = useState("");
-  const [watchRisk, setWatchRisk] = useState("Medium");
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [queueStatus, setQueueStatus] = useState<QueueStatus | null>(null);
-  const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
-  const [activeReport, setActiveReport] = useState<Report | null>(null);
-  const [activeReportSources, setActiveReportSources] = useState<ReportSource[]>([]);
-  const [activeReportAnnotations, setActiveReportAnnotations] = useState<ReportAnnotation[]>([]);
-  const [annotationDraft, setAnnotationDraft] = useState({ tags: "", note: "", confidence: "" });
-  const [reports, setReports] = useState<Report[]>([]);
-  const [sourceDocuments, setSourceDocuments] = useState<SourceDocument[]>([]);
-  const [activeSourceDetail, setActiveSourceDetail] = useState<SourceDocumentDetail | null>(null);
-  const [knowledgeQuery, setKnowledgeQuery] = useState("UNI");
-  const [degradedOnly, setDegradedOnly] = useState(false);
-  const [knowledgeReindexStatus, setKnowledgeReindexStatus] = useState("");
-  const [chatSessionId, setChatSessionId] = useState<string | null>(null);
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
-  const [providerStatuses, setProviderStatuses] = useState<ProviderStatus[]>([]);
-  const [providerStatus, setProviderStatus] = useState<string>("loading");
-  const [readinessItems, setReadinessItems] = useState<ReadinessItem[]>([]);
-  const [selectedReadinessId, setSelectedReadinessId] = useState<string | null>(null);
-  const [retentionDays, setRetentionDays] = useState("365");
-  const [retentionPreview, setRetentionPreview] = useState<RetentionPreview | null>(null);
-  const [retentionStatus, setRetentionStatus] = useState("");
-  const [marketSnapshots, setMarketSnapshots] = useState<MarketSnapshot[]>([]);
-  const [latestMarketSnapshot, setLatestMarketSnapshot] = useState<MarketSnapshot | null>(null);
-  const [watchlistItems, setWatchlistItems] = useState<WatchlistItem[]>([]);
-  const [watchEdits, setWatchEdits] = useState<Record<string, WatchlistEdit>>({});
-  const activeTask = useMemo(() => tasks.find((task) => task.id === activeTaskId), [tasks, activeTaskId]);
-  const selectedReadinessItem = useMemo(
-    () =>
-      readinessItems.find((item) => item.id === selectedReadinessId) ??
-      readinessItems.find((item) => item.status !== "ready") ??
-      readinessItems[0] ??
-      null,
-    [readinessItems, selectedReadinessId]
-  );
-  const canCancelActiveTask = activeTask ? ["pending", "running"].includes(activeTask.status) : false;
-  const canRetryActiveTask = activeTask ? ["failed", "cancelled"].includes(activeTask.status) : false;
-
-  function navigateToView(view: ViewKey) {
-    void navigate({ to: viewRoutes[view] });
-  }
-
-  async function invokeExtension<T>(extensionId: string, capabilityId: string, input: Record<string, unknown> = {}) {
-    const res = await fetch(`${apiBase}/extensions/${encodeURIComponent(extensionId)}/invoke`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ capabilityId, input })
-    });
-    const data = (await res.json()) as ExtensionInvokeResponse<T> & { message?: string };
-    if (!res.ok) throw new Error(data.message ?? `Extension ${extensionId}.${capabilityId} returned HTTP ${res.status}`);
-    return data;
-  }
-
-  async function refreshTasks() {
-    try {
-      const [tasksData, queueData] = await Promise.all([
-        invokeExtension<{ tasks: Task[] }>("web3.research", "research.list_tasks"),
-        invokeExtension<QueueStatus>("web3.research", "research.queue_status")
-      ]);
-      setTasks(tasksData.result?.tasks ?? []);
-      setQueueStatus(queueData.result ?? null);
-    } catch {
-      setQueueStatus(null);
-    }
-  }
-
-  async function refreshProviders() {
-    try {
-      const res = await fetch(`${apiBase}/providers/status`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      const providers = (data.providers ?? []) as ProviderStatus[];
-      const degraded = providers.filter((provider) => !provider.reachable).length;
-      setProviderStatuses(providers);
-      setProviderStatus(`${providers.length - degraded}/${providers.length} reachable`);
-    } catch {
-      setProviderStatuses([]);
-      setProviderStatus("API unavailable");
-    }
-  }
-
-  async function refreshAgentStatus() {
-    try {
-      const res = await fetch(`${apiBase}/agent/status`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setAgentStatus(await res.json());
-    } catch {
-      setAgentStatus(null);
-    }
-  }
-
-  async function refreshReadiness() {
-    try {
-      const res = await fetch(`${apiBase}/settings/readiness`);
-      if (!res.ok) return;
-      const data = await res.json();
-      setReadinessItems(data.items ?? []);
-    } catch {
-      setReadinessItems([]);
-    }
-  }
-
-  async function refreshReports() {
-    try {
-      const data = await invokeExtension<{ reports: Report[] }>("local.reports", "reports.read");
-      setReports(data.result?.reports ?? []);
-    } catch {
-      setReports([]);
-    }
-  }
-
-  async function searchReports(query = knowledgeQuery) {
-    try {
-      const data = await invokeExtension<{ reports: Report[] }>("local.knowledge", "knowledge.search", { query });
-      setReports(data.result?.reports ?? []);
-    } catch {
-      setReports([]);
-    }
-  }
-
-  async function searchSources(query = knowledgeQuery, onlyDegraded = degradedOnly) {
-    try {
-      const data = await invokeExtension<{ sources: SourceDocument[] }>("local.knowledge", "knowledge.search_sources", {
-        query,
-        degradedOnly: onlyDegraded
-      });
-      setSourceDocuments(data.result?.sources ?? []);
-    } catch {
-      setSourceDocuments([]);
-    }
-  }
-
-  async function reindexKnowledge() {
-    setKnowledgeReindexStatus("Reindexing reports...");
-    try {
-      const data = await invokeExtension<{ indexed?: number; total?: number; degradedReason?: string }>(
-        "local.knowledge",
-        "knowledge.index_report"
-      );
-      const result = data.result ?? {};
-      const summary = `Indexed ${result.indexed ?? 0}/${result.total ?? 0} reports`;
-      setKnowledgeReindexStatus(result.degradedReason ?? data.degradedReason ? `${summary}. ${result.degradedReason ?? data.degradedReason}` : summary);
-    } catch (error) {
-      setKnowledgeReindexStatus(error instanceof Error ? error.message : "Knowledge reindex failed.");
-    }
-  }
-
-  async function reindexReportVector(reportId: string) {
-    try {
-      const data = await invokeExtension<{ indexed?: boolean; title?: string; degradedReason?: string }>(
-        "local.knowledge",
-        "knowledge.index_report",
-        { reportId }
-      );
-      const result = data.result ?? {};
-      const message = result.indexed
-        ? `Vector rebuilt for ${result.title ?? reportId}.`
-        : `Vector was not rebuilt. ${result.degradedReason ?? data.degradedReason ?? "Embedding provider is unavailable."}`;
-      setKnowledgeReindexStatus(message);
-      return message;
-    } catch (error) {
-      return error instanceof Error ? error.message : "Report vector reindex failed.";
-    }
-  }
-
-  async function deleteReportVector(reportId: string) {
-    try {
-      const data = await invokeExtension<{ deleted?: boolean; title?: string; degradedReason?: string }>(
-        "local.knowledge",
-        "knowledge.delete_report_vector",
-        { reportId }
-      );
-      const result = data.result ?? {};
-      const message = result.deleted
-        ? `Vector cleared for ${result.title ?? reportId}.`
-        : `No vector row existed for ${result.title ?? reportId}.`;
-      setKnowledgeReindexStatus(result.degradedReason ? `${message} ${result.degradedReason}` : message);
-      return message;
-    } catch (error) {
-      return error instanceof Error ? error.message : "Report vector delete failed.";
-    }
-  }
-
-  async function saveReportAnnotation(reportId: string) {
-    const confidence = Number(annotationDraft.confidence);
-    const body = {
-      tags: annotationDraft.tags
-        .split(",")
-        .map((tag) => tag.trim())
-        .filter(Boolean),
-      note: annotationDraft.note,
-      confidence: Number.isFinite(confidence) ? Math.min(Math.max(confidence, 0), 100) : undefined
-    };
-    try {
-      await invokeExtension<ReportAnnotation>("local.reports", "reports.upsert_annotation", { reportId, ...body });
-      await loadReportAnnotations(reportId);
-      return "Manual annotation saved.";
-    } catch (error) {
-      return error instanceof Error ? error.message : "Report annotation save failed.";
-    }
-  }
-
-  async function deleteReportAnnotation(reportId: string, annotationId: string) {
-    try {
-      const data = await invokeExtension<{ deleted?: boolean }>("local.reports", "reports.delete_annotation", { reportId, annotationId });
-      await loadReportAnnotations(reportId);
-      return data.result?.deleted ? "Manual annotation deleted." : "Manual annotation was already absent.";
-    } catch (error) {
-      return error instanceof Error ? error.message : "Report annotation delete failed.";
-    }
-  }
-
-  async function previewRetention(days = retentionDays) {
-    const res = await fetch(`${apiBase}/settings/retention/preview?days=${encodeURIComponent(days)}`);
-    const data = await res.json();
-    if (!res.ok) {
-      setRetentionStatus(data.message ?? "Retention preview failed.");
-      return;
-    }
-    setRetentionPreview(data);
-    setRetentionStatus(data.degradedReason ? data.degradedReason : "Retention preview loaded.");
-  }
-
-  async function dryRunRetention() {
-    const days = Number(retentionDays);
-    const res = await fetch(`${apiBase}/settings/retention/prune`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ days: Number.isFinite(days) ? days : undefined, dryRun: true })
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      setRetentionStatus(data.message ?? "Retention dry-run failed.");
-      return;
-    }
-    setRetentionPreview(data);
-    setRetentionStatus(data.degradedReason ? data.degradedReason : "Dry-run complete. No records were deleted.");
-  }
-
-  async function refreshMarket() {
-    try {
-      const [latest, list] = await Promise.all([
-        invokeExtension<MarketSnapshot | null>("web3.market", "market.snapshot", { analyze: false }),
-        invokeExtension<{ snapshots: MarketSnapshot[] }>("web3.market", "market.list_snapshots")
-      ]);
-      setLatestMarketSnapshot(latest.result ?? null);
-      setMarketSnapshots(list.result?.snapshots ?? []);
-    } catch {
-      setLatestMarketSnapshot(null);
-      setMarketSnapshots([]);
-    }
-  }
-
-  async function analyzeMarket() {
-    const data = await invokeExtension<MarketSnapshot>("web3.market", "market.snapshot", { analyze: true });
-    const snapshot = data.result;
-    if (!snapshot) return;
-    setLatestMarketSnapshot(snapshot);
-    setMarketSnapshots((current) => [snapshot, ...current.filter((item) => item.id !== snapshot.id)]);
-  }
-
-  async function refreshWatchlist() {
-    try {
-      const res = await fetch(`${apiBase}/watchlist/items`);
-      if (!res.ok) return;
-      const data = await res.json();
-      setWatchlistItems(data.items ?? []);
-    } catch {
-      setWatchlistItems([]);
-    }
-  }
-
-  async function createWatchlistItem() {
-    const res = await fetch(`${apiBase}/watchlist/items`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        input,
-        note: watchNote || undefined,
-        riskLevel: watchRisk,
-        monitorRules: {
-          source: "manual",
-          createdFrom: "workbench"
-        }
-      })
-    });
-    if (!res.ok) return;
-    const item = (await res.json()) as WatchlistItem;
-    setWatchlistItems((current) => [item, ...current.filter((existing) => existing.id !== item.id)]);
-    setWatchNote("");
-  }
-
-  async function updateWatchlistItem(item: WatchlistItem) {
-    const edit = watchEdits[item.id] ?? { note: item.note ?? "", riskLevel: item.riskLevel ?? "Medium" };
-    const res = await fetch(`${apiBase}/watchlist/items/${encodeURIComponent(item.id)}`, {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        note: edit.note,
-        riskLevel: edit.riskLevel
-      })
-    });
-    if (!res.ok) return;
-    const updated = (await res.json()) as WatchlistItem;
-    setWatchlistItems((current) => current.map((existing) => (existing.id === updated.id ? updated : existing)));
-    setWatchEdits((current) => {
-      const next = { ...current };
-      delete next[item.id];
-      return next;
-    });
-  }
-
-  async function deleteWatchlistItem(itemId: string) {
-    const res = await fetch(`${apiBase}/watchlist/items/${encodeURIComponent(itemId)}`, { method: "DELETE" });
-    if (!res.ok) return;
-    setWatchlistItems((current) => current.filter((item) => item.id !== itemId));
-    setWatchEdits((current) => {
-      const next = { ...current };
-      delete next[itemId];
-      return next;
-    });
-  }
-
-  function updateWatchlistEdit(itemId: string, edit: WatchlistEdit) {
-    setWatchEdits((current) => ({
-      ...current,
-      [itemId]: edit
-    }));
-  }
-
-  async function handleReadinessAction(item: ReadinessItem) {
-    setSelectedReadinessId(item.id);
-    if (item.id === "coingecko") {
-      navigateToView("market");
-      await analyzeMarket();
-      return;
-    }
-    if (item.id === "evm-rpc" || item.id === "arkham") {
-      setInput("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48");
-      navigateToView("research");
-      return;
-    }
-    if (item.id === "holder-concentration") {
-      setKnowledgeQuery("");
-      setDegradedOnly(true);
-      navigateToView("knowledge");
-      await searchSources("", true);
-      return;
-    }
-    if (item.id === "siliconflow") {
-      setKnowledgeQuery("");
-      setDegradedOnly(false);
-      navigateToView("knowledge");
-      await Promise.all([searchReports(""), searchSources("", false)]);
-      return;
-    }
-    navigateToView("settings");
-  }
-
-  async function copyReadinessEnv(item: ReadinessItem) {
-    if (!item.envVars.length) return;
-    await navigator.clipboard?.writeText(readinessEnvTemplate(item));
-  }
-
-  async function ensureChatSession() {
-    if (chatSessionId) return chatSessionId;
-    const res = await fetch(`${apiBase}/chat/sessions`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ title: "Altcoin research" })
-    });
-    const data = await res.json();
-    setChatSessionId(data.id);
-    setChatMessages(data.messages ?? []);
-    return data.id as string;
-  }
-
-  async function createTask(nextInput = input) {
-    const data = await invokeExtension<{ task: Task; queued: boolean }>("web3.research", "research.create_task", {
-      input: nextInput,
-      inputType: "auto",
-      question: "现在适合买入吗？"
-    });
-    if (!data.result?.task) return;
-    const task = data.result.task;
-    setActiveTaskId(task.id);
-    setActiveReport(null);
-    setActiveReportSources([]);
-    setActiveSourceDetail(null);
-    setTasks((current) => [task, ...current.filter((existing) => existing.id !== task.id)]);
-    streamTask(task.id, task.input);
-    setKnowledgeQuery(task.input);
-    navigateToView("research");
-    await refreshTasks();
-    await searchSources(task.input);
-  }
-
-  async function cancelTask(taskId: string) {
-    const data = await invokeExtension<{ task: Task; cancelled: boolean }>("web3.research", "research.cancel_task", { taskId });
-    if (!data.result?.task) return;
-    setTasks((current) => current.map((task) => (task.id === taskId ? data.result!.task : task)));
-    if (taskId === activeTaskId) {
-      setActiveReport(null);
-      setActiveReportSources([]);
-      setActiveSourceDetail(null);
-    }
-    await refreshTasks();
-  }
-
-  async function retryTask(taskId: string, resumeFromNode?: string) {
-    const data = await invokeExtension<{ task: Task; queued: boolean }>(
-      "web3.research",
-      "research.retry_task",
-      resumeFromNode ? { taskId, resumeFromNode } : { taskId }
-    );
-    if (!data.result?.task) return;
-    const task = data.result.task;
-    setActiveTaskId(task.id);
-    setActiveReport(null);
-    setActiveReportSources([]);
-    setActiveSourceDetail(null);
-    setTasks((current) => [task, ...current]);
-    streamTask(task.id, task.input);
-    navigateToView("research");
-    await refreshTasks();
-  }
-
-  async function sendChat() {
-    const sessionId = await ensureChatSession();
-    const res = await fetch(`${apiBase}/chat/sessions/${sessionId}/messages`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ content: input, triggerResearch: true })
-    });
-    const data = await res.json();
-    setChatMessages((current) => [...current, data.message, data.assistantMessage].filter(Boolean));
-    if (data.task?.id) setActiveTaskId(data.task.id);
-    if (data.task) {
-      setActiveReport(null);
-      setActiveReportSources([]);
-      setActiveSourceDetail(null);
-      setTasks((current) => [data.task, ...current.filter((task) => task.id !== data.task.id)]);
-      streamTask(data.task.id, data.task.input, { chatSessionId: sessionId });
-    }
-    navigateToView("chat");
-    await refreshTasks();
-  }
-
-  async function sendAgentMessage() {
-    const content = agentInput.trim();
-    if (!content) return;
-    const userMessage: ChatMessage = {
-      id: `local_user_${Date.now()}`,
-      role: "user",
-      content,
-      metadata: {},
-      createdAt: new Date().toISOString()
-    };
-    setChatMessages((current) => [...current, userMessage]);
-    setAgentInput("");
-    setAgentMessageStatus("Running Pi turn...");
-    try {
-      const res = await fetch(`${apiBase}/agent/messages`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ content })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message ?? `HTTP ${res.status}`);
-      setChatMessages((current) => [
-        ...current,
-        {
-          id: `agent_${Date.now()}`,
-          role: "assistant",
-          content: data.degradedReason ? `${data.content}\n\nDegraded: ${data.degradedReason}` : data.content,
-          metadata: {
-            provider: data.provider,
-            model: data.model,
-            activeTools: data.activeTools
-          },
-          createdAt: new Date().toISOString()
-        }
-      ]);
-      setAgentMessageStatus(data.model ? `${data.provider} / ${data.model}` : data.provider);
-      await refreshAgentStatus();
-    } catch (error) {
-      setChatMessages((current) => [
-        ...current,
-        {
-          id: `agent_error_${Date.now()}`,
-          role: "assistant",
-          content: error instanceof Error ? `Agent turn failed: ${error.message}` : "Agent turn failed.",
-          metadata: {},
-          createdAt: new Date().toISOString()
-        }
-      ]);
-      setAgentMessageStatus("Agent API unavailable");
-    }
-  }
-
-  function mergeTaskEvent(taskId: string, event: TaskEvent) {
-    setTasks((current) =>
-      current.map((task) => {
-        if (task.id !== taskId) return task;
-        if (task.events.some((existing) => existing.id === event.id)) return task;
-        return {
-          ...task,
-          status:
-            event.eventType === "task_failed"
-              ? "failed"
-              : event.eventType === "task_cancelled"
-                ? "cancelled"
-                : event.eventType === "task_completed"
-                  ? "completed"
-                  : task.status,
-          currentNode: event.node ?? task.currentNode,
-          events: [...task.events, event]
-        };
-      })
-    );
-  }
-
-  function streamTask(taskId: string, query: string, options: { chatSessionId?: string } = {}) {
-    const source = new EventSource(`${apiBase}/extensions/web3.research/research/tasks/${encodeURIComponent(taskId)}/events/stream`);
-    const eventNames = [
-      "task_started",
-      "node_started",
-      "node_completed",
-      "agent_report_started",
-      "agent_report_completed",
-      "agent_report_degraded",
-      "task_completed",
-      "knowledge_indexed",
-      "task_failed",
-      "task_cancelled"
-    ];
-    for (const eventName of eventNames) {
-      source.addEventListener(eventName, (message) => {
-        const event = JSON.parse((message as MessageEvent).data) as TaskEvent;
-        mergeTaskEvent(taskId, event);
-      });
-    }
-    source.addEventListener("done", async () => {
-      source.close();
-      await refreshTasks();
-      try {
-        const reportRead = await invokeExtension<Report>("web3.research", "research.get_report", { taskId });
-        const report = reportRead.result;
-        if (!report) return;
-        setActiveReport(report);
-        await loadReportSources(report.id);
-        if (options.chatSessionId) await appendChatReportMessage(options.chatSessionId, taskId, report);
-      } catch {
-        setActiveReport(null);
-      }
-      await searchReports(query);
-      await searchSources(query);
-    });
-    source.onerror = () => {
-      source.close();
-      void refreshTasks();
-    };
-  }
-
-  async function appendChatReportMessage(sessionId: string, taskId: string, report: Report) {
-    const marker = `Report: ${report.id}`;
-    if (chatMessages.some((message) => message.role === "assistant" && message.content.includes(marker))) return;
-    const content = [
-      "Research report completed.",
-      "",
-      `Task: ${taskId}`,
-      marker,
-      `Recommendation: ${report.recommendation}`,
-      `Confidence: ${report.confidence}`,
-      "",
-      report.summary
-    ].join("\n");
-    const res = await fetch(`${apiBase}/chat/sessions/${sessionId}/messages`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        role: "assistant",
-        content,
-        triggerResearch: false
-      })
-    });
-    if (!res.ok) return;
-    const data = await res.json();
-    if (data.message) {
-      setChatMessages((current) => (current.some((message) => message.content.includes(marker)) ? current : [...current, data.message]));
-    }
-  }
-
-  async function openTask(taskId: string) {
-    setActiveTaskId(taskId);
-    setActiveSourceDetail(null);
-    try {
-      const data = await invokeExtension<Report>("web3.research", "research.get_report", { taskId });
-      if (!data.result) throw new Error("Task report is not available.");
-      const report = data.result;
-      setActiveReport(report);
-      await loadReportSources(report.id);
-      await loadReportAnnotations(report.id);
-    } catch {
-      setActiveReport(null);
-      setActiveReportSources([]);
-      setActiveReportAnnotations([]);
-    }
-  }
-
-  async function openReport(reportId: string) {
-    const data = await invokeExtension<Report>("local.reports", "reports.read_one", { reportId });
-    const report = data.result;
-    if (!report) return;
-    setActiveReport(report);
-    setActiveTaskId(report.taskId);
-    setActiveSourceDetail(null);
-    await loadReportSources(report.id);
-    await loadReportAnnotations(report.id);
-  }
-
-  async function openSource(sourceId: string) {
-    try {
-      const data = await invokeExtension<SourceDocumentDetail>("local.knowledge", "knowledge.get_source", { sourceId });
-      if (data.result) setActiveSourceDetail(data.result);
-    } catch {
-      setActiveSourceDetail(null);
-    }
-  }
-
-  async function loadReportSources(reportId: string) {
-    try {
-      const data = await invokeExtension<{ sources: ReportSource[] }>("local.reports", "reports.read_sources", { reportId });
-      setActiveReportSources(data.result?.sources ?? []);
-    } catch {
-      setActiveReportSources([]);
-    }
-  }
-
-  async function loadReportAnnotations(reportId: string) {
-    try {
-      const data = await invokeExtension<{ annotations: ReportAnnotation[] }>("local.reports", "reports.read_annotations", { reportId });
-      const annotations = data.result?.annotations ?? [];
-      setActiveReportAnnotations(annotations);
-      const first = annotations[0];
-      setAnnotationDraft({
-        tags: first?.tags.join(", ") ?? "",
-        note: first?.note ?? "",
-        confidence: first?.confidence === undefined ? "" : String(first.confidence)
-      });
-    } catch {
-      setActiveReportAnnotations([]);
-      setAnnotationDraft({ tags: "", note: "", confidence: "" });
-    }
-  }
+  const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
+  const [statusText, setStatusText] = useState("Checking runtime");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   useEffect(() => {
-    void refreshAgentStatus();
-    void refreshTasks();
-    void refreshProviders();
-    void refreshReadiness();
-    void refreshReports();
-    void searchSources();
-    void refreshMarket();
-    void refreshWatchlist();
+    let cancelled = false;
+    async function refreshStatus() {
+      try {
+        const res = await fetch(`${apiBase}/agent/status`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const status = (await res.json()) as AgentStatus;
+        if (cancelled) return;
+        setAgentStatus(status);
+        const runtime = status.piRuntime;
+        if (!runtime?.configured) {
+          setStatusText("Runtime missing key");
+        } else if (!runtime.reachable) {
+          setStatusText("Runtime degraded");
+        } else {
+          setStatusText("Base ready");
+        }
+      } catch {
+        if (!cancelled) {
+          setAgentStatus(null);
+          setStatusText("API unavailable");
+        }
+      }
+    }
+    void refreshStatus();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
+  const runtime = useAgentAssistantRuntime();
+
   return (
-    <main className="shell" data-testid="app-shell">
-      <aside className="nav" data-testid="main-nav">
-        <div className="brand">SP Agent</div>
-        {navItems.map((item) => {
-          const Icon = item.icon;
+    <AssistantRuntimeProvider runtime={runtime}>
+      <TooltipProvider>
+        <main className="baseShell" data-testid="app-shell">
+          <section
+            className={cn("baseFrame", sidebarCollapsed && "sidebarCollapsed")}
+            data-testid="view-chat"
+          >
+            <div className="runtimeAnchors" data-testid="model-tabs" aria-hidden="true" />
+            <AssistantThreadSidebar collapsed={sidebarCollapsed} />
+            <section className="chatSurface" data-testid="agent-thread-panel">
+              <ChatHeader
+                sidebarCollapsed={sidebarCollapsed}
+                onToggleSidebar={() => setSidebarCollapsed((value) => !value)}
+                status={agentStatus}
+                statusText={statusText}
+              />
+              <AssistantThread />
+            </section>
+          </section>
+        </main>
+      </TooltipProvider>
+    </AssistantRuntimeProvider>
+  );
+}
+
+function TooltipIconButton({
+  tooltip,
+  className,
+  children,
+  ...props
+}: React.ComponentProps<typeof Button> & { tooltip: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<Button variant="ghost" size="icon" className={className} {...props} />}>
+        {children}
+      </TooltipTrigger>
+      <TooltipContent>{tooltip}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+function Logo({ collapsed = false }: { collapsed?: boolean }) {
+  return (
+    <div className={cn("sidebarBrand", collapsed && "collapsed")}>
+      <Bot size={22} />
+      <strong>assistant-ui</strong>
+    </div>
+  );
+}
+
+function ThreadListContent({ collapsed = false }: { collapsed?: boolean }) {
+  return (
+    <ThreadListPrimitive.Root className={cn("threadListRoot", collapsed && "collapsed")}>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <ThreadListPrimitive.New
+              className={cn("newThreadButton", collapsed && "collapsed")}
+              data-testid="new-thread-button"
+            />
+          }
+        >
+          <Plus size={20} />
+          <span>New Thread</span>
+        </TooltipTrigger>
+        {collapsed && <TooltipContent side="right">New Thread</TooltipContent>}
+      </Tooltip>
+      {!collapsed && <div className="threadGroupLabel">Today</div>}
+      <div className={cn("threadList", collapsed && "collapsed")} data-testid="thread-list">
+        <ThreadListPrimitive.Items>
+          {() => (
+            <ThreadListItemPrimitive.Root className="threadItemRoot">
+              <ThreadListItemPrimitive.Trigger className="threadItem">
+                <ThreadListItemPrimitive.Title />
+              </ThreadListItemPrimitive.Trigger>
+            </ThreadListItemPrimitive.Root>
+          )}
+        </ThreadListPrimitive.Items>
+      </div>
+    </ThreadListPrimitive.Root>
+  );
+}
+
+function AssistantThreadSidebar({ collapsed }: { collapsed: boolean }) {
+  return (
+    <aside className={cn("threadSidebar", collapsed && "collapsed")} data-testid="thread-sidebar">
+      <Logo collapsed={collapsed} />
+      <ThreadListContent collapsed={collapsed} />
+    </aside>
+  );
+}
+
+function MobileSidebar() {
+  return (
+    <Sheet>
+      <SheetTrigger render={<Button variant="ghost" size="icon" className="mobileMenuButton" />}>
+        <Menu size={18} />
+        <span className="srOnly">Toggle menu</span>
+      </SheetTrigger>
+      <SheetContent side="left" className="mobileSheet" showCloseButton={false}>
+        <Logo />
+        <ThreadListContent />
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+function ThreadTitle() {
+  const title = useAuiState((state) => {
+    const item = state.threads.threadItems.find((thread) => thread.id === state.threads.mainThreadId);
+    return item?.title;
+  });
+  return <strong className="threadTitleText">{title ?? "New Chat"}</strong>;
+}
+
+function ChatHeader({
+  sidebarCollapsed,
+  onToggleSidebar,
+  status,
+  statusText
+}: {
+  sidebarCollapsed: boolean;
+  onToggleSidebar: () => void;
+  status: AgentStatus | null;
+  statusText: string;
+}) {
+  const runtimeLabel = status?.piRuntime?.selectedModel ?? status?.piRuntime?.model ?? status?.piRuntime?.provider ?? "Base";
+  return (
+    <header className="chatHeader">
+      <div className="chatTitle">
+        <MobileSidebar />
+        <TooltipIconButton
+          tooltip={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
+          className="sidebarToggle"
+          onClick={onToggleSidebar}
+          aria-label={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
+        >
+          <PanelLeft size={18} />
+        </TooltipIconButton>
+        <ThreadTitle />
+      </div>
+      <div className="headerActions">
+        <span className="smallRuntime" data-testid="runtime-label">
+          {runtimeLabel}
+        </span>
+        <span className="smallRuntime" data-testid="provider-status-button">
+          {statusText}
+        </span>
+        <span className="extensionCount" data-testid="extension-count">
+          {status?.extensions?.length ?? 0} ext
+        </span>
+        <TooltipIconButton tooltip="Share" className="iconButton" disabled>
+          <Share size={18} />
+        </TooltipIconButton>
+      </div>
+    </header>
+  );
+}
+
+function useAgentAssistantRuntime() {
+  const adapter = useMemo<ChatModelAdapter>(
+    () => ({
+      async *run({ messages, abortSignal, unstable_threadId }) {
+        const content = latestUserText(messages);
+        if (!content) {
+          yield { content: [{ type: "text", text: "请输入你的问题。" }] };
+          return;
+        }
+
+        const res = await fetch(`${apiBase}/agent/messages`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ content, sessionId: unstable_threadId }),
+          signal: abortSignal
+        });
+        const data = (await res.json()) as AgentMessageResponse & { message?: string };
+        if (!res.ok) throw new Error(data.message ?? `Agent API returned HTTP ${res.status}`);
+        await updateSessionTitle(data.sessionId, makeThreadTitle(content));
+
+        const degraded = data.degradedReason ? `\n\n降级原因：${data.degradedReason}` : "";
+        const tools = data.toolCalls?.length ? `\n\n工具调用：${data.toolCalls.length}` : "";
+        yield { content: [{ type: "text", text: `${data.content}${degraded}${tools}` }] };
+      }
+    }),
+    []
+  );
+  return useRemoteThreadListRuntime({
+    adapter: assistantThreadListAdapter,
+    runtimeHook: () => useLocalRuntime(adapter)
+  });
+}
+
+function isNewChatView(state: AssistantState) {
+  return state.thread.messages.length === 0 && (!state.thread.isLoading || state.threads.isLoading);
+}
+
+function AssistantThread() {
+  const isEmpty = useAuiState(isNewChatView);
+  return (
+    <ThreadPrimitive.Root className="assistantUiRoot">
+      <ThreadPrimitive.Viewport className={cn("assistantViewport", isEmpty && "empty")} turnAnchor="top">
+        <div className="assistantMessageStack">
+          <AssistantEmptyState />
+          <ThreadPrimitive.Messages>{() => <AssistantThreadMessage />}</ThreadPrimitive.Messages>
+        </div>
+        <ThreadPrimitive.ViewportFooter className={cn("threadViewportFooter", !isEmpty && "sticky")}>
+          <ThreadPrimitive.ScrollToBottom className="scrollToBottomButton" title="Scroll to bottom">
+            <ArrowDown size={16} />
+          </ThreadPrimitive.ScrollToBottom>
+          <AssistantComposer />
+          <PromptChips />
+        </ThreadPrimitive.ViewportFooter>
+      </ThreadPrimitive.Viewport>
+    </ThreadPrimitive.Root>
+  );
+}
+
+function AssistantEmptyState() {
+  const isEmpty = useAuiState(isNewChatView);
+  if (!isEmpty) return null;
+  return (
+    <div className="assistantWelcome" data-testid="assistant-empty-state">
+      <h1>How can I help you today?</h1>
+    </div>
+  );
+}
+
+function AssistantThreadMessage() {
+  const role = useAuiState((state) => state.message.role);
+  const isRunning = useAuiState((state) => state.message.status?.type === "running");
+  return (
+    <MessagePrimitive.Root className={role === "user" ? "messageBubble user" : "messageBubble assistant"}>
+      <AssistantMessageParts />
+      {role === "assistant" && isRunning && <span className="assistantThinking">Connecting</span>}
+      <MessageActions role={role} />
+    </MessagePrimitive.Root>
+  );
+}
+
+function AssistantMessageParts() {
+  return (
+    <MessagePrimitive.Parts>
+      {({ part }) => {
+        if (part.type === "text" || part.type === "reasoning") return <p>{part.text}</p>;
+        if (part.type === "tool-call") return <p>{`Tool: ${part.toolName}`}</p>;
+        if (part.type === "source") return <p>{part.title ?? part.url ?? "Source"}</p>;
+        return null;
+      }}
+    </MessagePrimitive.Parts>
+  );
+}
+
+function MessageActions({ role }: { role: "user" | "assistant" | "system" | "tool" }) {
+  if (role !== "user" && role !== "assistant") return null;
+  return (
+    <div className="messageActions">
+      <BranchPickerPrimitive.Root hideWhenSingleBranch className="branchPicker">
+        <BranchPickerPrimitive.Previous className="actionIcon">‹</BranchPickerPrimitive.Previous>
+        <span>
+          <BranchPickerPrimitive.Number /> / <BranchPickerPrimitive.Count />
+        </span>
+        <BranchPickerPrimitive.Next className="actionIcon">›</BranchPickerPrimitive.Next>
+      </BranchPickerPrimitive.Root>
+      <ActionBarPrimitive.Root hideWhenRunning autohide="not-last" className="actionBar">
+        {role === "assistant" ? (
+          <>
+            <ActionBarPrimitive.Copy className="actionIcon" title="Copy">
+              <Copy size={14} />
+            </ActionBarPrimitive.Copy>
+            <ActionBarPrimitive.Reload className="actionIcon" title="Refresh">
+              <RefreshCw size={14} />
+            </ActionBarPrimitive.Reload>
+            <DropdownMenu>
+              <DropdownMenuTrigger className="actionIcon" title="More">
+                <MoreHorizontal size={14} />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent className="w-40">
+                <ActionBarPrimitive.ExportMarkdown asChild>
+                  <DropdownMenuItem>Export Markdown</DropdownMenuItem>
+                </ActionBarPrimitive.ExportMarkdown>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </>
+        ) : (
+          <ActionBarPrimitive.Edit className="actionIcon" title="Edit">
+            <PenLine size={14} />
+          </ActionBarPrimitive.Edit>
+        )}
+      </ActionBarPrimitive.Root>
+    </div>
+  );
+}
+
+function PromptChips() {
+  const aui = useAui();
+  const [expandedLabel, setExpandedLabel] = useState<string | null>(null);
+  const isEmpty = useAuiState(isNewChatView);
+  const isRunning = useAuiState((state) => state.thread.isRunning);
+  if (!isEmpty) return <div className="promptChips hidden" data-testid="prompt-chips" />;
+  const expandedGroup = suggestionGroups.find((group) => group.label === expandedLabel);
+  const sendPrompt = (prompt: string) => {
+    if (isRunning) return;
+    aui.thread().append({
+      content: [{ type: "text", text: prompt }],
+      runConfig: aui.composer().getState().runConfig
+    });
+  };
+  return (
+    <div className="promptChips" data-testid="prompt-chips">
+      <div className="promptChipRow">
+        {suggestionGroups.map((group) => {
+          const Icon = group.icon;
           return (
-            <Link
-              key={item.key}
-              to={viewRoutes[item.key]}
-              className={item.key === activeView ? "navItem active" : "navItem"}
-              data-testid={`nav-${item.key}`}
+            <Button
+              key={group.label}
+              variant="outline"
+              className={cn("promptChip", expandedLabel === group.label && "active")}
+              onClick={() => setExpandedLabel((current) => (current === group.label ? null : group.label))}
             >
-              <Icon size={17} />
-              {item.label}
-            </Link>
+              <Icon size={18} />
+              {group.label}
+            </Button>
           );
         })}
-      </aside>
+      </div>
+      {expandedGroup && (
+        <div className="promptOptionRow">
+          {expandedGroup.options.map((option) => (
+            <Button
+              key={option.label}
+              variant="ghost"
+              className="promptOption"
+              onClick={() => sendPrompt(option.prompt)}
+            >
+              {option.label}
+            </Button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
-      <section className="workspace">
-        <header className="topbar">
-          <div>
-            <h1>{viewTitle[activeView].title}</h1>
-            <p>{viewTitle[activeView].subtitle}</p>
-          </div>
-          <button
-            className="status"
-            data-testid="provider-status-button"
-            onClick={() => {
-              navigateToView("settings");
-              void refreshProviders();
-              void refreshReadiness();
-            }}
-          >
-            {providerStatus}
-          </button>
-        </header>
-
-        {activeView === "chat" && (
-          <section className="agentCommandRow" data-testid="agent-input-row">
-            <input
-              value={agentInput}
-              onChange={(event) => setAgentInput(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") void sendAgentMessage();
-              }}
-              placeholder="Ask the local personal agent"
-            />
-            <button onClick={sendAgentMessage}>
-              <Send size={16} />
-              Send
-            </button>
-          </section>
-        )}
-
-        {["research", "watchlist"].includes(activeView) && (
-          <section className="inputRow" data-testid="research-input-row">
-            <input value={input} onChange={(event) => setInput(event.target.value)} placeholder="Token address, symbol, project name, or URL" />
-            <button onClick={sendChat}>Research Chat</button>
-            <button onClick={() => createTask()}>Run Research</button>
-          </section>
-        )}
-
-        {activeView === "chat" && (
-          <section className="viewGrid agentGrid" data-testid="view-chat">
-            <AgentStatusPanel status={agentStatus} providerStatus={providerStatus} messageStatus={agentMessageStatus} onRefresh={refreshAgentStatus} />
-            <section className="panel wide agentConversation" data-testid="agent-thread-panel">
-              <div className="panelHeader">
-                <h2>Agent Thread</h2>
-                <button className="smallAction" onClick={() => setChatMessages([])}>Clear</button>
-              </div>
-              <div className="chatThread tall">
-                {chatMessages.map((message) => (
-                  <div key={message.id} className={message.role === "user" ? "chatBubble user" : "chatBubble assistant"}>
-                    <strong>{message.role}</strong>
-                    <p>{message.content}</p>
-                  </div>
-                ))}
-                {!chatMessages.length && <p className="empty">Ask the local agent about its runtime, extensions, or next research skill to invoke.</p>}
-              </div>
-            </section>
-            <ExtensionRegistryPanel extensions={agentStatus?.extensions ?? []} />
-          </section>
-        )}
-
-        {activeView === "research" && (
-          <section className="viewGrid researchGrid" data-testid="view-research">
-            <div className="stackedPanels">
-              <QueueStatusPanel status={queueStatus} onRefresh={refreshTasks} />
-              <TaskList tasks={tasks} activeTaskId={activeTaskId} onRefresh={refreshTasks} onOpen={openTask} />
-            </div>
-            <TaskProgress
-              task={activeTask}
-              canCancel={canCancelActiveTask}
-              canRetry={canRetryActiveTask}
-              onCancel={cancelTask}
-              onRetry={retryTask}
-              onRetryFromNode={retryTask}
-            />
-            <ReportPanel
-              report={activeReport}
-              sources={activeReportSources}
-              annotations={activeReportAnnotations}
-              annotationDraft={annotationDraft}
-              onAnnotationDraftChange={setAnnotationDraft}
-              onSaveAnnotation={saveReportAnnotation}
-              onDeleteAnnotation={deleteReportAnnotation}
-              onReindexVector={reindexReportVector}
-              onDeleteVector={deleteReportVector}
-            />
-          </section>
-        )}
-
-        {activeView === "market" && (
-          <MarketView
-            snapshots={marketSnapshots}
-            latestSnapshot={latestMarketSnapshot}
-            onRefresh={refreshMarket}
-            onAnalyze={analyzeMarket}
-            onSelectSnapshot={setLatestMarketSnapshot}
-          />
-        )}
-
-        {activeView === "knowledge" && (
-          <section className="viewGrid knowledgeGrid" data-testid="view-knowledge">
-            <KnowledgeSearch
-              knowledgeQuery={knowledgeQuery}
-              degradedOnly={degradedOnly}
-              sources={sourceDocuments}
-              reports={reports}
-              activeReportId={activeReport?.id}
-              onQueryChange={setKnowledgeQuery}
-              onDegradedOnlyChange={(checked) => {
-                setDegradedOnly(checked);
-                void searchSources(knowledgeQuery, checked);
-              }}
-              onSearch={() => {
-                void searchReports();
-                void searchSources();
-              }}
-              onReindex={() => {
-                void reindexKnowledge();
-              }}
-              reindexStatus={knowledgeReindexStatus}
-              onOpenReport={openReport}
-              onOpenSource={openSource}
-            />
-            <SourceDetail detail={activeSourceDetail} onOpenReport={openReport} />
-            <ReportPanel
-              report={activeReport}
-              sources={activeReportSources}
-              annotations={activeReportAnnotations}
-              annotationDraft={annotationDraft}
-              onAnnotationDraftChange={setAnnotationDraft}
-              onSaveAnnotation={saveReportAnnotation}
-              onDeleteAnnotation={deleteReportAnnotation}
-              onReindexVector={reindexReportVector}
-              onDeleteVector={deleteReportVector}
-            />
-          </section>
-        )}
-
-        {activeView === "watchlist" && (
-          <WatchlistView
-            input={input}
-            note={watchNote}
-            risk={watchRisk}
-            items={watchlistItems}
-            edits={watchEdits}
-            onInputChange={setInput}
-            onNoteChange={setWatchNote}
-            onRiskChange={setWatchRisk}
-            onCreate={createWatchlistItem}
-            onRefresh={refreshWatchlist}
-            onEditChange={updateWatchlistEdit}
-            onSave={(item) => { void updateWatchlistItem(item); }}
-            onRemove={(itemId) => { void deleteWatchlistItem(itemId); }}
-            onResearch={(itemInput) => {
-              setInput(itemInput);
-              void createTask(itemInput);
-            }}
-          />
-        )}
-
-        {activeView === "reports" && (
-          <ReportsView
-            reports={reports}
-            activeReport={activeReport}
-            activeReportSources={activeReportSources}
-            activeReportAnnotations={activeReportAnnotations}
-            annotationDraft={annotationDraft}
-            onRefreshReports={refreshReports}
-            onOpenReport={openReport}
-            onAnnotationDraftChange={setAnnotationDraft}
-            onSaveAnnotation={saveReportAnnotation}
-            onDeleteAnnotation={deleteReportAnnotation}
-            onReindexVector={reindexReportVector}
-            onDeleteVector={deleteReportVector}
-          />
-        )}
-
-        {activeView === "settings" && (
-          <SettingsView
-            providerStatuses={providerStatuses}
-            readinessItems={readinessItems}
-            selectedReadinessItem={selectedReadinessItem}
-            retentionDays={retentionDays}
-            retentionPreview={retentionPreview}
-            retentionStatus={retentionStatus}
-            onRefreshProviders={refreshProviders}
-            onRefreshReadiness={refreshReadiness}
-            onSelectReadiness={setSelectedReadinessId}
-            onReadinessAction={handleReadinessAction}
-            onCopyReadinessEnv={copyReadinessEnv}
-            onRetentionDaysChange={setRetentionDays}
-            onPreviewRetention={previewRetention}
-            onDryRunRetention={dryRunRetention}
-          />
-        )}
-      </section>
-    </main>
+function AssistantComposer() {
+  const isRunning = useAuiState((state) => state.thread.isRunning);
+  return (
+    <ComposerPrimitive.Root className="assistantComposer" data-testid="assistant-composer">
+      <div className="composerInputShell">
+        <ComposerPrimitive.Input placeholder="Send a message... (@ to mention, / for commands)" rows={2} />
+        <div className="composerToolbar">
+          <Button variant="ghost" size="icon" className="composerIcon" title="Add attachment" disabled>
+            <Plus size={21} />
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger className="modelSelector">
+              Base Agent
+              <ChevronDown size={16} />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent className="w-44">
+              <DropdownMenuItem>Base Agent</DropdownMenuItem>
+              <DropdownMenuItem data-disabled>Pi Runtime</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <span className="composerSpacer" />
+          <Button variant="ghost" size="icon" className="composerIcon" title="Voice input will be added in the speech phase" disabled data-testid="voice-slot">
+            <Mic size={21} />
+          </Button>
+          {isRunning ? (
+            <ComposerPrimitive.Cancel className="sendButton" title="Stop generating">
+              <Square size={18} />
+            </ComposerPrimitive.Cancel>
+          ) : (
+            <ComposerPrimitive.Send className="sendButton" title="Send message">
+              <ArrowUp size={19} />
+            </ComposerPrimitive.Send>
+          )}
+        </div>
+      </div>
+    </ComposerPrimitive.Root>
   );
 }
 
@@ -1117,13 +716,7 @@ const rootRoute = createRootRoute({
 
 const routeTree = rootRoute.addChildren([
   createRoute({ getParentRoute: () => rootRoute, path: "/" }),
-  createRoute({ getParentRoute: () => rootRoute, path: "chat" }),
-  createRoute({ getParentRoute: () => rootRoute, path: "research" }),
-  createRoute({ getParentRoute: () => rootRoute, path: "market" }),
-  createRoute({ getParentRoute: () => rootRoute, path: "knowledge" }),
-  createRoute({ getParentRoute: () => rootRoute, path: "watchlist" }),
-  createRoute({ getParentRoute: () => rootRoute, path: "reports" }),
-  createRoute({ getParentRoute: () => rootRoute, path: "settings" })
+  createRoute({ getParentRoute: () => rootRoute, path: "chat" })
 ]);
 
 const router = createRouter({ routeTree });

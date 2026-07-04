@@ -1,5 +1,6 @@
 node_modules
 .pnpm-store/
+.cache/
 .electron-cache/
 dist/
 apps/*/dist/
@@ -7,6 +8,8 @@ packages/*/dist/
 
 # Local secrets and runtime state
 .env
+.sp-agent-data/
+apps/*/.sp-agent-data/
 **/.data/
 
 # OS/editor noise

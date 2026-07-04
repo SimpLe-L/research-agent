@@ -1,7 +1,10 @@
 packages:
-  - "apps/*"
-  - "packages/*"
-  - "workers/*"
+  - "apps/api"
+  - "apps/web"
+  - "apps/desktop"
+  - "packages/shared"
+  - "packages/extensions"
+  - "packages/agent-runtime"
 allowBuilds:
   '@nestjs/core': set this to true or false
   electron: set this to true or false

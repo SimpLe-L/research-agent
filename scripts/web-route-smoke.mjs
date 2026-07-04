@@ -5,21 +5,18 @@ const port = Number(process.env.SMOKE_WEB_PORT ?? 5175);
 const host = process.env.SMOKE_WEB_HOST ?? "127.0.0.1";
 const timeoutMs = Number(process.env.SMOKE_TIMEOUT_MS ?? 45000);
 const pollIntervalMs = Number(process.env.SMOKE_POLL_INTERVAL_MS ?? 300);
-const routes = ["/", "/chat", "/research", "/market", "/knowledge", "/watchlist", "/reports", "/settings"];
+const routes = ["/", "/chat"];
 const requiredBundleMarkers = [
   "data-testid",
-  "view-research",
-  "view-settings",
-  "queue-status-panel",
-  "readiness-panel",
-  "copy-report-markdown",
-  "reindex-report-vector",
-  "delete-report-vector",
-  "report-annotation-panel",
-  "save-report-annotation",
-  "retention-panel",
-  "retention-preview",
-  "retention-dry-run"
+  "view-chat",
+  "thread-sidebar",
+  "assistant-empty-state",
+  "assistant-composer",
+  "voice-slot",
+  "model-tabs",
+  "prompt-chips",
+  "provider-status-button",
+  "extension-count"
 ];
 
 let previewProcess;
@@ -65,7 +62,7 @@ async function main() {
   const cssAssets = assetPaths.filter((asset) => asset.endsWith(".css"));
   for (const asset of cssAssets) {
     const css = await readText(`${base}/${asset}`);
-    assert(css.includes(".shell"), `${asset} did not include shell styles`);
+    assert(css.includes(".baseShell"), `${asset} did not include base shell styles`);
   }
 
   await stopPreview();

@@ -1,5 +1,5 @@
-import { Body, Controller, Get, Inject, Post, Put, Query } from "@nestjs/common";
-import { pruneRetentionSchema, settingsSchema } from "@sp-agent/shared";
+import { Body, Controller, Get, Inject, Put } from "@nestjs/common";
+import { settingsSchema } from "@sp-agent/shared";
 import { SettingsService } from "./settings.service.js";
 
 @Controller("settings")
@@ -14,17 +14,6 @@ export class SettingsController {
   @Get("readiness")
   readiness() {
     return this.settingsService.readiness();
-  }
-
-  @Get("retention/preview")
-  retentionPreview(@Query("days") days?: string) {
-    return this.settingsService.retentionPreview(days ? Number(days) : undefined);
-  }
-
-  @Post("retention/prune")
-  pruneRetention(@Body() body: unknown) {
-    const input = pruneRetentionSchema.parse(body ?? {});
-    return this.settingsService.pruneRetention(input);
   }
 
   @Put()
