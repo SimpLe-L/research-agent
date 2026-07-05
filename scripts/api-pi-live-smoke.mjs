@@ -12,7 +12,7 @@ const dataDir = await mkdtemp(join(tmpdir(), "sp-agent-api-pi-live-"));
 let apiProcess;
 
 async function main() {
-  assert(Boolean(process.env.SILICONFLOW_API_KEY || process.env.PI_API_KEY), "Live API smoke requires SILICONFLOW_API_KEY or PI_API_KEY in .env.");
+  assert(Boolean(process.env.SILICONFLOW_API_KEY), "Live API smoke requires SILICONFLOW_API_KEY in .env.");
 
   if (!process.env.SMOKE_API_BASE) {
     apiProcess = spawn(process.execPath, ["apps/api/dist/apps/api/src/main.js"], {

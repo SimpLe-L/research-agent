@@ -65,6 +65,7 @@ Electron development behavior:
 - The desktop shell loads the built renderer by default.
 - `RENDERER_URL` is the only way to opt into a dev server; this prevents stale local dev servers from replacing the built assistant-ui screen.
 - The desktop shell starts the API with a real Node executable (`NODE_BINARY`, `npm_node_execpath`, or `node`) so Pi SDK dependencies run under normal Node rather than Electron's Node compatibility mode.
+- The desktop shell stops its API child process when all windows are closed, including on macOS, so local reopen cycles do not keep reusing an old in-memory API bundle.
 - `pnpm smoke:desktop:api-child` verifies the API child strategy without opening a GUI window.
 - The current GUI smoke has been verified with `pnpm --filter @sp-agent/desktop start`: Electron loads `apps/web/dist/index.html`, shows `Base ready`, surfaces `pi` and the extension count, and renders a Pi/SiliconFlow chat response.
 
@@ -117,8 +118,9 @@ The renderer should stay compact and predictable:
 - Do not add marketing hero pages, decorative dashboards, or complex workbench navigation to the first screen.
 - Use `assistant-ui` runtime/primitives as the chat state and interaction boundary instead of custom chat state where possible.
 - Use Tailwind CSS v4 plus shadcn/base UI primitives for the assistant-ui example-style shell controls: buttons, tooltips, sheet navigation, dropdowns, and future menus.
+- Keep assistant-ui shell styling in component Tailwind classes following the official shadcn registry example shape. `apps/web/src/styles.css` should remain limited to Tailwind/shadcn imports, theme tokens, global reset, and app-specific surfaces such as approval review and voice call overlays.
 - Current web runtime uses `useRemoteThreadListRuntime` plus a local `RemoteThreadListAdapter` for API-backed chat sessions.
-- Current message runtime uses `useLocalRuntime` plus a `ChatModelAdapter` that calls `POST /api/agent/messages`; assistant-ui owns composer/run lifecycle while the API gateway owns provider, permission, memory, and persistence behavior.
+- Current message runtime uses `useLocalRuntime` plus a `ChatModelAdapter` that calls `POST /api/agent/messages/stream` and reads `text/event-stream` model deltas; assistant-ui owns composer/run lifecycle while the API gateway owns provider, permission, memory, and persistence behavior.
 - Current history loading uses a thread-scoped `ThreadHistoryAdapter` that reads `GET /api/chat/sessions/:id`.
 
 Active route contract is intentionally small: `/` and `/chat` both render the chat-first shell.
@@ -148,6 +150,7 @@ Active surfaces:
 - `DELETE /api/memory/:id`
 - `GET /api/agent/status`
 - `POST /api/agent/messages`
+- `POST /api/agent/messages/stream`
 - `GET /api/extensions`
 - `GET /api/extensions/:id`
 - `POST /api/extensions/:id/invoke`
@@ -295,7 +298,7 @@ The API should decide which memory operations are automatic and which require us
 
 Current implementation:
 
-- Chat sessions persist to `chat.json` under `SP_AGENT_DATA_DIR` or `.sp-agent-data`.
+- Chat sessions persist to PostgreSQL tables `chat_sessions` and `chat_messages` when `DATABASE_URL` is configured. The API keeps a local `chat.json` fallback under `SP_AGENT_DATA_DIR` or `.sp-agent-data` only when PostgreSQL is unavailable.
 - Memory entries persist to `memory.json` under `SP_AGENT_DATA_DIR` or `.sp-agent-data`.
 - `memory.search` is read-only and can be exposed to agent tool calls.
 - `memory.write_candidate` creates candidate entries and audit events but is classified as `write_or_provider`, so agent auto-tool calls cannot invoke it without approval.
@@ -330,19 +333,58 @@ Current Phase 1 API surfaces:
 - `POST /api/voice/synthesize`
 - `POST /api/voice/chat`
 
-`packages/speech` currently includes missing-provider degraded adapters, deterministic STT/TTS adapters for local smoke coverage, `openai-compatible-stt`, and `gpt-sovits-api`. These real provider adapters are optional and environment-configured; missing keys or unavailable local services must keep speech in a degraded state without changing the agent runtime.
+`packages/speech` currently includes missing-provider degraded adapters, deterministic STT/TTS adapters for local smoke coverage, OpenAI-compatible transcription adapters, local `gpt-sovits-api`, and cloud `minimax-t2a-v2`. These real provider adapters are optional and environment-configured; missing keys, unavailable local services, or paid cloud-provider failures must keep speech in a degraded state without changing the agent runtime.
 
-Provider environment variables:
+Supported provider tracks:
 
-- `SPEECH_STT_PROVIDER=openai-compatible-stt`
-- `OPENAI_COMPATIBLE_STT_URL`
-- `OPENAI_COMPATIBLE_STT_API_KEY`
-- `OPENAI_COMPATIBLE_STT_MODEL`
-- `SPEECH_TTS_PROVIDER=gpt-sovits-api`
-- `GPT_SOVITS_TTS_URL`
-- `GPT_SOVITS_REF_AUDIO_PATH`
-- `GPT_SOVITS_PROMPT_TEXT`
-- optional `GPT_SOVITS_TEXT_LANG`, `GPT_SOVITS_PROMPT_LANG`, `GPT_SOVITS_SEED`, `GPT_SOVITS_TOP_K`, `GPT_SOVITS_BATCH_SIZE`, `GPT_SOVITS_TEXT_SPLIT_METHOD`, and `GPT_SOVITS_MIME_TYPE`
+1. Self-hosted voice stack:
+   - STT runs as a FunASR sidecar service. The preferred integration is FunASR's OpenAI-compatible `/v1/audio/transcriptions` endpoint.
+   - TTS runs as a GPT-SoVITS sidecar service exposing a `/tts` endpoint.
+   - NestJS stays the control plane. Do not embed Python, torch, model downloads, or GPU lifecycle inside Electron/NestJS.
+2. Cloud TTS stack:
+   - TTS uses MiniMax T2A v2 through `minimax-t2a-v2`.
+   - STT still uses an OpenAI-compatible transcription endpoint, either local FunASR or another configured service.
+   - Use this path when the local machine cannot run GPT-SoVITS reliably.
+
+Self-hosted FunASR + GPT-SoVITS environment:
+
+```bash
+SPEECH_STT_PROVIDER=openai-audio-transcriptions-stt
+OPENAI_TRANSCRIPTIONS_STT_URL=http://127.0.0.1:8000/v1/audio/transcriptions
+OPENAI_TRANSCRIPTIONS_STT_MODEL=sensevoice
+OPENAI_TRANSCRIPTIONS_STT_API_KEY=
+OPENAI_TRANSCRIPTIONS_STT_RESPONSE_FORMAT=verbose_json
+OPENAI_TRANSCRIPTIONS_STT_LANGUAGE=zh
+
+SPEECH_TTS_PROVIDER=gpt-sovits-api
+GPT_SOVITS_TTS_URL=http://127.0.0.1:9880/tts
+GPT_SOVITS_REF_AUDIO_PATH=/absolute/path/to/reference.wav
+GPT_SOVITS_PROMPT_TEXT=reference audio transcript
+GPT_SOVITS_TEXT_LANG=zh
+GPT_SOVITS_PROMPT_LANG=zh
+GPT_SOVITS_TEXT_SPLIT_METHOD=cut0
+```
+
+MiniMax cloud TTS environment:
+
+```bash
+SPEECH_STT_PROVIDER=openai-audio-transcriptions-stt
+OPENAI_TRANSCRIPTIONS_STT_URL=http://127.0.0.1:8000/v1/audio/transcriptions
+OPENAI_TRANSCRIPTIONS_STT_MODEL=sensevoice
+
+SPEECH_TTS_PROVIDER=minimax-t2a-v2
+MINIMAX_TTS_URL=https://api.minimax.chat/v1/t2a_v2
+MINIMAX_API_KEY=
+MINIMAX_GROUP_ID=
+MINIMAX_TTS_MODEL=speech-02-hd
+MINIMAX_TTS_VOICE_ID=
+MINIMAX_TTS_FORMAT=mp3
+MINIMAX_TTS_SAMPLE_RATE=32000
+MINIMAX_TTS_BITRATE=128000
+MINIMAX_TTS_CHANNEL=1
+```
+
+`openai-compatible-stt` remains available only for providers that expose chat-completions audio input instead of `/v1/audio/transcriptions`; it is not the preferred FunASR path.
 
 First version:
 
@@ -366,6 +408,16 @@ microphone stream
 -> streaming TTS chunks
 -> playback queue
 -> interruption / barge-in handling
+```
+
+Streaming voice should borrow the queue pattern from voice-agent systems without copying their stack:
+
+```text
+agent text stream
+-> sentence splitter
+-> TTS text queue
+-> TTS audio queue
+-> renderer playback queue
 ```
 
 Raw audio persistence should be disabled by default unless the product adds a clear setting and retention policy.

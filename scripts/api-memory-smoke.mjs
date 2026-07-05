@@ -16,8 +16,7 @@ try {
         ...process.env,
         PORT: String(port),
         SP_AGENT_DATA_DIR: dataDir,
-        SILICONFLOW_API_KEY: "",
-        PI_API_KEY: ""
+        SILICONFLOW_API_KEY: ""
       },
       stdio: ["ignore", "pipe", "pipe"]
     });

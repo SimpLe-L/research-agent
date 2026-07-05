@@ -4,8 +4,7 @@ const { getAgentRuntimeStatus, runPersonalAgentTurnWithAgent } = await import(".
 async function main() {
   const missingConfig = await getAgentRuntimeStatus({
     AGENT_RUNTIME_PROVIDER: "pi",
-    SILICONFLOW_API_KEY: "",
-    PI_API_KEY: ""
+    SILICONFLOW_API_KEY: ""
   });
   assert(missingConfig.provider === "pi", `expected pi provider, got ${missingConfig.provider}`);
   assert(missingConfig.sdkLoaded === true, "expected Pi SDK package to be loadable");
@@ -14,9 +13,9 @@ async function main() {
 
   const missingModelEnv = {
     AGENT_RUNTIME_PROVIDER: "pi",
-    PI_MODEL_PROVIDER: "openai",
+    PI_MODEL_PROVIDER: "siliconflow",
     PI_MODEL_ID: "sp-agent-missing-model",
-    PI_API_KEY: "sp-agent-local-smoke-placeholder",
+    SILICONFLOW_API_KEY: "sp-agent-local-smoke-placeholder",
     PI_AGENT_RUNTIME_TIMEOUT_MS: "1000"
   };
   const missingModel = await getAgentRuntimeStatus(missingModelEnv);
@@ -44,7 +43,7 @@ async function main() {
       PI_AGENT_RUNTIME_TIMEOUT_MS: process.env.PI_LIVE_SMOKE_TIMEOUT_MS ?? "120000"
     };
     const liveStatus = await getAgentRuntimeStatus(liveEnv);
-    assert(liveStatus.configured === true, "PI_LIVE_SMOKE=1 requires SILICONFLOW_API_KEY, PI_API_KEY, or another valid provider key source");
+    assert(liveStatus.configured === true, "PI_LIVE_SMOKE=1 requires SILICONFLOW_API_KEY.");
     assert(liveStatus.reachable === true, `expected live Pi runtime locally ready, got ${liveStatus.degradedReason ?? "unknown"}`);
     liveTurn = await runPersonalAgentTurnWithAgent(
       {

@@ -8,6 +8,15 @@ type PiModelRegistry = {
   getAvailable(): unknown[];
 };
 
+type PiAgentSession = {
+  prompt(prompt: string, options?: Record<string, unknown>): Promise<unknown>;
+  subscribe(callback: (event: unknown) => void): () => void;
+  dispose(): void;
+  state?: { messages?: unknown };
+  messages?: unknown;
+  getActiveToolNames?: () => string[];
+};
+
 export type AgentRuntimeStatus = {
   provider: string;
   configured: boolean;
@@ -58,12 +67,17 @@ export type PersonalAgentTurnResult = {
   toolCalls?: AgentRuntimeToolCallAudit[];
 };
 
+export type PersonalAgentTurnStreamEvent =
+  | { type: "text_delta"; text: string }
+  | { type: "done"; result: PersonalAgentTurnResult };
+
 export type RuntimeAdapter = {
   id: string;
   label: string;
   default: boolean;
   getStatus(env?: NodeJS.ProcessEnv): Promise<AgentRuntimeStatus>;
   runTurn(input: PersonalAgentTurnInput, env?: NodeJS.ProcessEnv): Promise<PersonalAgentTurnResult>;
+  streamTurn?(input: PersonalAgentTurnInput, env?: NodeJS.ProcessEnv): AsyncIterable<PersonalAgentTurnStreamEvent>;
 };
 
 const piRuntimeAdapter: RuntimeAdapter = {
@@ -71,7 +85,8 @@ const piRuntimeAdapter: RuntimeAdapter = {
   label: "Pi",
   default: true,
   getStatus: getPiAgentRuntimeStatus,
-  runTurn: runPiPersonalAgentTurn
+  runTurn: runPiPersonalAgentTurn,
+  streamTurn: streamPiPersonalAgentTurn
 };
 
 const localDeterministicRuntimeAdapter: RuntimeAdapter = {
@@ -84,16 +99,19 @@ const localDeterministicRuntimeAdapter: RuntimeAdapter = {
     reachable: true
   }),
   runTurn: async (input) => {
-    const memoryCount = input.memoryContext?.length ?? 0;
-    const extensionCount = input.extensionManifests?.length ?? 0;
     return {
       content:
         `本地确定性 runtime 已接管本轮回复。收到用户消息：${truncateForReply(input.message)}\n` +
-        `当前可见扩展 ${extensionCount} 个，检索到相关记忆 ${memoryCount} 条。该 adapter 不调用外部模型，适合作为离线降级和注册表验证路径。`,
+        "当前是离线降级模式，无法进行真实模型推理； typed chat、memory、skills 边界仍保持可用。",
       provider: "local-deterministic",
       model: "deterministic-v0",
       activeTools: []
     };
+  },
+  streamTurn: async function* (input) {
+    const result = await localDeterministicRuntimeAdapter.runTurn(input);
+    for (const text of chunkText(result.content)) yield { type: "text_delta", text };
+    yield { type: "done", result };
   }
 };
 
@@ -117,6 +135,97 @@ function truncateForReply(value: string) {
   return clean.length > 80 ? `${clean.slice(0, 80)}...` : clean;
 }
 
+function sanitizeVisibleAgentContent(content: string): string {
+  const lines = content.split(/\r?\n/);
+  const cleaned: string[] = [];
+  let isLeadingBlock = true;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (isLeadingBlock && isInternalProcessLine(trimmed)) continue;
+    if (isToolCountLine(trimmed)) continue;
+    if (trimmed) isLeadingBlock = false;
+    cleaned.push(line);
+  }
+  return cleaned.join("\n").replace(/^\s+/, "").trim();
+}
+
+function isInternalProcessLine(line: string): boolean {
+  if (!line) return false;
+  return [
+    /^我(?:先|会|将|来)?(?:搜索|检索|查看|检查|查询).*(?:本地记忆|记忆|扩展|书签|工具|registry)/,
+    /^让我(?:先|来)?(?:搜索|检索|查看|检查|查询).*(?:本地记忆|记忆|扩展|书签|工具|registry)/,
+    /^正在(?:搜索|检索|查看|检查|查询).*(?:本地记忆|记忆|扩展|书签|工具|registry)/,
+    /^已(?:搜索|检索|查看|检查|查询).*(?:本地记忆|记忆|扩展|书签|工具|registry)/,
+    /^本地记忆和书签中(?:没有|未找到)/,
+    /^我(?:没有|未)(?:在)?(?:本地记忆|记忆|书签|扩展).*(?:找到|检索到|搜索到)/
+  ].some((pattern) => pattern.test(line));
+}
+
+function isToolCountLine(line: string): boolean {
+  return /^工具调用[:：]\s*\d+\s*$/.test(line);
+}
+
+async function* streamFromNonStreamingTurn(
+  adapter: RuntimeAdapter,
+  input: PersonalAgentTurnInput,
+  env: NodeJS.ProcessEnv
+): AsyncIterable<PersonalAgentTurnStreamEvent> {
+  const result = await adapter.runTurn(input, env);
+  for (const text of chunkText(result.content)) yield { type: "text_delta", text };
+  yield { type: "done", result };
+}
+
+function chunkText(text: string): string[] {
+  const chars = Array.from(text);
+  const chunkSize = chars.length > 240 ? 4 : chars.length > 120 ? 3 : 2;
+  const chunks: string[] = [];
+  for (let index = 0; index < chars.length; index += chunkSize) {
+    chunks.push(chars.slice(index, index + chunkSize).join(""));
+  }
+  return chunks;
+}
+
+function createAsyncQueue<T>() {
+  const values: T[] = [];
+  const waiters: Array<{ resolve: (value: IteratorResult<T>) => void; reject: (error: unknown) => void }> = [];
+  let ended = false;
+  let failure: unknown;
+
+  return {
+    push(value: T) {
+      if (ended) return;
+      const waiter = waiters.shift();
+      if (waiter) {
+        waiter.resolve({ value, done: false });
+        return;
+      }
+      values.push(value);
+    },
+    end() {
+      ended = true;
+      while (waiters.length > 0) waiters.shift()?.resolve({ value: undefined as T, done: true });
+    },
+    fail(error: unknown) {
+      failure = error;
+      ended = true;
+      while (waiters.length > 0) waiters.shift()?.reject(error);
+    },
+    async *iterate(): AsyncIterable<T> {
+      while (true) {
+        if (values.length > 0) {
+          yield values.shift() as T;
+          continue;
+        }
+        if (failure) throw failure;
+        if (ended) return;
+        const next = await new Promise<IteratorResult<T>>((resolve, reject) => waiters.push({ resolve, reject }));
+        if (next.done) return;
+        yield next.value;
+      }
+    }
+  };
+}
+
 const inspectExtensionRegistryParams = Type.Object({
   maxChars: Type.Optional(Type.Number({ description: "Maximum JSON characters to return. Default 12000." }))
 });
@@ -136,6 +245,14 @@ export async function runPersonalAgentTurnWithAgent(
   env: NodeJS.ProcessEnv = process.env
 ): Promise<PersonalAgentTurnResult> {
   return getSelectedRuntimeAdapter(env).runTurn(input, env);
+}
+
+export function streamPersonalAgentTurnWithAgent(
+  input: PersonalAgentTurnInput,
+  env: NodeJS.ProcessEnv = process.env
+): AsyncIterable<PersonalAgentTurnStreamEvent> {
+  const adapter = getSelectedRuntimeAdapter(env);
+  return adapter.streamTurn ? adapter.streamTurn(input, env) : streamFromNonStreamingTurn(adapter, input, env);
 }
 
 async function getPiAgentRuntimeStatus(env: NodeJS.ProcessEnv = process.env): Promise<AgentRuntimeStatus> {
@@ -161,10 +278,7 @@ async function getPiAgentRuntimeStatus(env: NodeJS.ProcessEnv = process.env): Pr
         sdkLoaded: true,
         selectedModelAvailable: Boolean(selectedModel),
         availableModelCount,
-        degradedReason:
-          provider === "siliconflow"
-            ? "AGENT_RUNTIME_PROVIDER=pi defaults to siliconflow/deepseek-ai/DeepSeek-V4-Flash and requires SILICONFLOW_API_KEY or PI_API_KEY."
-            : "AGENT_RUNTIME_PROVIDER=pi requires PI_API_KEY or the selected provider's standard environment API key."
+        degradedReason: `AGENT_RUNTIME_PROVIDER=pi requires SILICONFLOW_API_KEY for the configured Pi model provider (${provider}).`
       };
     }
 
@@ -208,19 +322,12 @@ async function runPiPersonalAgentTurn(
   const modelLabel = `${provider}/${modelId}`;
 
   if (!piHasApiKey(provider, env)) {
-    const memoryNote =
-      input.memoryContext && input.memoryContext.length > 0
-        ? ` 已检索到 ${input.memoryContext.length} 条相关本地记忆，但当前缺少模型密钥，未进入模型推理。`
-        : "";
     return {
       content:
-        `本地个人 agent 基座已启动。当前缺少 Pi 模型密钥，所以这次使用确定性降级回复；你仍然可以继续搭建 memory、speech 和 skills 边界。${memoryNote}`,
+        "本地个人 agent 基座已启动。当前缺少 Pi 模型密钥，所以这次使用确定性降级回复；你仍然可以继续搭建 memory、speech 和 skills 边界。",
       provider: "pi",
       model: modelLabel,
-      degradedReason:
-        provider === "siliconflow"
-          ? "AGENT_RUNTIME_PROVIDER=pi requires SILICONFLOW_API_KEY or PI_API_KEY for the built-in SiliconFlow Pi provider."
-          : "AGENT_RUNTIME_PROVIDER=pi requires PI_API_KEY or the selected provider's standard environment API key.",
+      degradedReason: `AGENT_RUNTIME_PROVIDER=pi requires SILICONFLOW_API_KEY for the configured Pi model provider (${provider}).`,
       activeTools: ["inspect_extension_registry", "invoke_extension_capability"],
       toolCalls: []
     };
@@ -282,7 +389,7 @@ async function runPiPersonalAgentTurn(
       session.dispose();
     }
 
-    const content = (chunks.join("").trim() || finalAssistantText || extractLastAssistantText(finalMessages) || "").trim();
+    const content = sanitizeVisibleAgentContent((chunks.join("").trim() || finalAssistantText || extractLastAssistantText(finalMessages) || "").trim());
     if (!content) {
       return {
         content: "Pi runtime 已返回空输出。本地 agent shell 保持降级可用。",
@@ -312,6 +419,134 @@ async function runPiPersonalAgentTurn(
       toolCalls: []
     };
   }
+}
+
+async function* streamPiPersonalAgentTurn(
+  input: PersonalAgentTurnInput,
+  env: NodeJS.ProcessEnv = process.env
+): AsyncIterable<PersonalAgentTurnStreamEvent> {
+  const provider = piModelProvider(env);
+  const modelId = piModelId(env);
+  const modelLabel = `${provider}/${modelId}`;
+
+  if (!piHasApiKey(provider, env)) {
+    const result: PersonalAgentTurnResult = {
+      content: "本地个人 agent 基座已启动。当前缺少 Pi 模型密钥，所以这次使用确定性降级回复；你仍然可以继续搭建 memory、speech 和 skills 边界。",
+      provider: "pi",
+      model: modelLabel,
+      degradedReason: `AGENT_RUNTIME_PROVIDER=pi requires SILICONFLOW_API_KEY for the configured Pi model provider (${provider}).`,
+      activeTools: ["inspect_extension_registry", "invoke_extension_capability"],
+      toolCalls: []
+    };
+    for (const text of chunkText(result.content)) yield { type: "text_delta", text };
+    yield { type: "done", result };
+    return;
+  }
+
+  const queue = createAsyncQueue<PersonalAgentTurnStreamEvent>();
+  void (async () => {
+    let unsubscribe: (() => void) | undefined;
+    let session: PiAgentSession | undefined;
+    try {
+      const { pi, authStorage, modelRegistry, model } = await createPiModelContext(env, provider, modelId);
+      if (!model) {
+        const result: PersonalAgentTurnResult = {
+          content: "Pi runtime 已选择，但当前模型不在 Pi model registry 中。本地 agent shell 保持降级可用。",
+          provider: "pi",
+          model: modelLabel,
+          degradedReason: `Pi model ${provider}/${modelId} was not found in the Pi model registry.`
+        };
+        for (const text of chunkText(result.content)) queue.push({ type: "text_delta", text });
+        queue.push({ type: "done", result });
+        return;
+      }
+
+      const chunks: string[] = [];
+      const toolCalls: AgentRuntimeToolCallAudit[] = [];
+      let finalAssistantText = "";
+      let finalMessages: unknown;
+      const customTools = createPiAgentShellTools(input);
+      const appToolNames = customTools.map((tool) => tool.name);
+      const created = await pi.createAgentSession({
+        cwd: env.PI_WORKING_DIR || process.cwd(),
+        authStorage,
+        modelRegistry,
+        model,
+        thinkingLevel: parsePiThinkingLevel(env.PI_THINKING_LEVEL),
+        noTools: "builtin",
+        tools: appToolNames,
+        excludeTools: ["read", "bash", "edit", "write", "grep", "find", "ls"],
+        customTools,
+        sessionManager: pi.SessionManager.inMemory(env.PI_WORKING_DIR || process.cwd())
+      });
+      session = created.session as PiAgentSession;
+      const modelFallbackMessage = created.modelFallbackMessage;
+
+      unsubscribe = session.subscribe((event: unknown) => {
+        const delta = extractPiStreamingTextDelta(event);
+        if (delta) {
+          chunks.push(delta);
+          queue.push({ type: "text_delta", text: delta });
+        }
+        const finalText = extractPiFinalAssistantText(event);
+        if (finalText) finalAssistantText = finalText;
+        const toolAudit = extractPiToolAudit(event);
+        if (toolAudit) mergePiToolAudit(toolCalls, toolAudit);
+      });
+      const activeTools = session.getActiveToolNames?.() ?? appToolNames;
+
+      await withTimeout(
+        (async () => {
+          await session.prompt(buildPiAgentShellPrompt(input), {
+            expandPromptTemplates: false
+          });
+        })(),
+        piRequestTimeoutMs(env),
+        "Pi SDK personal agent stream timed out."
+      );
+      finalMessages = session.state?.messages ?? session.messages;
+      const content = sanitizeVisibleAgentContent((chunks.join("").trim() || finalAssistantText || extractLastAssistantText(finalMessages) || "").trim());
+      if (!chunks.join("").trim() && content) {
+        for (const text of chunkText(content)) queue.push({ type: "text_delta", text });
+      }
+      const result: PersonalAgentTurnResult = content
+        ? {
+            content,
+            provider: "pi",
+            model: modelLabel,
+            degradedReason: modelFallbackMessage,
+            activeTools,
+            toolCalls
+          }
+        : {
+            content: "Pi runtime 已返回空输出。本地 agent shell 保持降级可用。",
+            provider: "pi",
+            model: modelLabel,
+            degradedReason: modelFallbackMessage ? `Pi SDK returned no assistant text. ${modelFallbackMessage}` : "Pi SDK returned no assistant text.",
+            activeTools,
+            toolCalls
+          };
+      if (!content) queue.push({ type: "text_delta", text: result.content });
+      queue.push({ type: "done", result });
+    } catch (error) {
+      const result: PersonalAgentTurnResult = {
+        content: "Pi runtime 调用失败。本地 agent shell 保持降级可用，后续可以继续走确定性本地能力。",
+        provider: "pi",
+        model: modelLabel,
+        degradedReason: error instanceof Error ? error.message : "Pi SDK personal agent stream failed.",
+        activeTools: ["inspect_extension_registry", "invoke_extension_capability"],
+        toolCalls: []
+      };
+      for (const text of chunkText(result.content)) queue.push({ type: "text_delta", text });
+      queue.push({ type: "done", result });
+    } finally {
+      unsubscribe?.();
+      session?.dispose();
+      queue.end();
+    }
+  })();
+
+  yield* queue.iterate();
 }
 
 async function createPiModelContext(env: NodeJS.ProcessEnv, provider: string, modelId: string) {
@@ -406,7 +641,7 @@ function createPiAgentShellTools(input: PersonalAgentTurnInput): ToolDefinition[
 function buildPiAgentShellPrompt(input: PersonalAgentTurnInput): string {
   return JSON.stringify({
     instruction:
-      "You are the Pi runtime for a local-first single-user personal Agent OS. Reply in concise Chinese. You may use provided memoryContext as retrieved local memory. You may inspect the extension registry, but you must not claim to execute skills unless a tool result proves it. Do not request private keys. Do not suggest wallet transactions, swaps, transfers, posting automation, shell tools, file-write tools, or unrestricted browser control. Speech is a planned app-owned layer; describe it as planned unless tool results prove availability. Keep the response under 10 lines.",
+      "You are the Pi runtime for a local-first single-user personal Agent OS. Reply in concise Chinese. Use provided memoryContext silently as background context. Do not mention that you searched memory, inspected extensions, called tools, or checked bookmarks unless the user explicitly asks how you know or asks for debug details. Do not expose tool-call counts, internal planning, retrieval steps, or capability names in the final answer. You may inspect the extension registry, but you must not claim to execute skills unless a tool result proves it. If memory or tools provide no relevant evidence, answer normally from general knowledge and say uncertainty only when needed. Do not request private keys. Do not suggest wallet transactions, swaps, transfers, posting automation, shell tools, file-write tools, or unrestricted browser control. Speech is an app-owned layer; describe only proven availability. Keep the response under 10 lines.",
     userMessage: input.message,
     sessionId: input.sessionId,
     memoryContext: input.memoryContext ?? [],
@@ -469,6 +704,16 @@ function extractPiTextDelta(event: unknown): string | undefined {
   const message = record.message as Record<string, unknown> | undefined;
   const content = message?.content ?? record.content;
   return typeof content === "string" ? content : undefined;
+}
+
+function extractPiStreamingTextDelta(event: unknown): string | undefined {
+  const record = event as Record<string, unknown>;
+  const assistantMessageEvent = record.assistantMessageEvent as Record<string, unknown> | undefined;
+  if (record.type === "message_update" && assistantMessageEvent?.type === "text_delta" && typeof assistantMessageEvent.delta === "string") {
+    return assistantMessageEvent.delta;
+  }
+  const delta = record.delta ?? record.textDelta ?? record.contentDelta;
+  return typeof delta === "string" ? delta : undefined;
 }
 
 function extractPiFinalAssistantText(event: unknown): string | undefined {
@@ -555,9 +800,8 @@ function piModelId(env: NodeJS.ProcessEnv): string {
 }
 
 function piApiKey(provider: string, env: NodeJS.ProcessEnv): string | undefined {
-  if (env.PI_API_KEY) return env.PI_API_KEY;
   if (provider.toLowerCase() === "siliconflow") return env.SILICONFLOW_API_KEY;
-  return knownPiProviderEnvKey(provider, env);
+  return undefined;
 }
 
 function piHasApiKey(provider: string, env: NodeJS.ProcessEnv): boolean {
@@ -593,15 +837,6 @@ function registerSiliconFlowPiProvider(modelRegistry: PiModelRegistry, env: Node
       }
     ]
   });
-}
-
-function knownPiProviderEnvKey(provider: string, env: NodeJS.ProcessEnv): string | undefined {
-  const normalized = provider.toLowerCase();
-  if (normalized === "openai") return env.OPENAI_API_KEY;
-  if (normalized === "anthropic") return env.ANTHROPIC_API_KEY;
-  if (normalized === "google") return env.GOOGLE_API_KEY || env.GEMINI_API_KEY;
-  if (normalized === "mistral") return env.MISTRAL_API_KEY;
-  return undefined;
 }
 
 function parsePiThinkingLevel(value: string | undefined): "off" | "minimal" | "low" | "medium" | "high" | "xhigh" {

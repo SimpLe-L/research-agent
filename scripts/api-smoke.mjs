@@ -17,8 +17,7 @@ async function main() {
         ...process.env,
         PORT: String(port),
         SP_AGENT_DATA_DIR: dataDir,
-        SILICONFLOW_API_KEY: "",
-        PI_API_KEY: ""
+        SILICONFLOW_API_KEY: ""
       },
       stdio: ["ignore", "pipe", "pipe"]
     });
@@ -68,6 +67,24 @@ async function main() {
   assert(savedSession.messages[0].role === "user", "expected persisted user message");
   assert(savedSession.messages[1].role === "assistant", "expected persisted assistant message");
 
+  const deleted = await deleteJson(`${base}/chat/sessions/${session.id}`);
+  assert(deleted.deleted === true && deleted.sessionId === session.id, "expected chat session delete response");
+  const sessionsAfterDelete = await readJson(`${base}/chat/sessions`);
+  assert(!sessionsAfterDelete.sessions.some((item) => item.id === session.id), "deleted chat session should be absent from list");
+
+  const streamSession = await postJson(`${base}/chat/sessions`, { title: "API stream smoke" });
+  const streamEvents = await postSse(`${base}/agent/messages/stream`, {
+    content: "用流式接口回答当前项目状态。",
+    sessionId: streamSession.id
+  });
+  assert(streamEvents.some((event) => event.type === "metadata" && event.sessionId === streamSession.id), "expected stream metadata event");
+  assert(streamEvents.some((event) => event.type === "text_delta" && event.text), "expected stream text_delta events");
+  const doneEvent = streamEvents.find((event) => event.type === "done");
+  assert(doneEvent?.result?.sessionId === streamSession.id, "expected stream done event with session id");
+  const savedStreamSession = await readJson(`${base}/chat/sessions/${streamSession.id}`);
+  assert(savedStreamSession.messages?.length === 2, "expected streamed user and assistant messages to persist");
+  await deleteJson(`${base}/chat/sessions/${streamSession.id}`);
+
   await stopApi();
   console.log(
     JSON.stringify(
@@ -113,6 +130,34 @@ async function postJson(url, body) {
   const data = await response.json();
   assert(response.ok, `${url} returned HTTP ${response.status}: ${data.message ?? "unknown error"}`);
   return data;
+}
+
+async function deleteJson(url) {
+  const response = await fetch(url, { method: "DELETE" });
+  const data = await response.json();
+  assert(response.ok, `${url} returned HTTP ${response.status}: ${data.message ?? "unknown error"}`);
+  return data;
+}
+
+async function postSse(url, body) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  const text = await response.text();
+  assert(response.ok, `${url} returned HTTP ${response.status}: ${text}`);
+  return text
+    .split(/\n\n+/)
+    .map((raw) =>
+      raw
+        .split(/\r?\n/)
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trimStart())
+        .join("\n")
+    )
+    .filter(Boolean)
+    .map((data) => JSON.parse(data));
 }
 
 async function stopApi() {

@@ -29,7 +29,6 @@ export class SettingsService {
             "AGENT_RUNTIME_PROVIDER",
             "PI_MODEL_PROVIDER",
             "PI_MODEL_ID",
-            "PI_API_KEY",
             "SILICONFLOW_API_KEY",
             "SILICONFLOW_BASE_URL",
             "PI_AGENT_RUNTIME_TIMEOUT_MS",
@@ -42,14 +41,13 @@ export class SettingsService {
             "PI_MODEL_ID=deepseek-ai/DeepSeek-V4-Flash",
             "SILICONFLOW_BASE_URL=https://api.siliconflow.cn/v1",
             "SILICONFLOW_API_KEY=",
-            "PI_API_KEY=",
             "PI_AGENT_RUNTIME_TIMEOUT_MS=120000",
             "PI_THINKING_LEVEL=off",
             "PI_WORKING_DIR="
           ].join("\n"),
           action: piRuntime.reachable
             ? "Run pnpm smoke:agent-runtime:pi after runtime changes; use PI_LIVE_SMOKE=1 with real credentials for a live model call."
-            : "Fill SILICONFLOW_API_KEY or PI_API_KEY, then restart the API.",
+            : "Fill SILICONFLOW_API_KEY, then restart the API.",
           docsHint: piRuntime.degradedReason
         },
         {
@@ -66,12 +64,21 @@ export class SettingsService {
           label: "Speech STT provider",
           status: readinessStatus(speech.stt.configured, speech.stt.reachable),
           capability: "Transcribe recorded audio before it enters the normal agent message path",
-          envVars: ["SPEECH_STT_PROVIDER", "OPENAI_COMPATIBLE_STT_URL", "OPENAI_COMPATIBLE_STT_API_KEY", "OPENAI_COMPATIBLE_STT_MODEL"],
+          envVars: [
+            "SPEECH_STT_PROVIDER",
+            "OPENAI_TRANSCRIPTIONS_STT_URL",
+            "OPENAI_TRANSCRIPTIONS_STT_MODEL",
+            "OPENAI_TRANSCRIPTIONS_STT_API_KEY",
+            "OPENAI_COMPATIBLE_STT_URL",
+            "OPENAI_COMPATIBLE_STT_API_KEY",
+            "OPENAI_COMPATIBLE_STT_MODEL"
+          ],
           envTemplate: [
-            "SPEECH_STT_PROVIDER=openai-compatible-stt",
-            "OPENAI_COMPATIBLE_STT_URL=",
-            "OPENAI_COMPATIBLE_STT_API_KEY=",
-            "OPENAI_COMPATIBLE_STT_MODEL="
+            "SPEECH_STT_PROVIDER=openai-audio-transcriptions-stt",
+            "OPENAI_TRANSCRIPTIONS_STT_URL=http://127.0.0.1:8000/v1/audio/transcriptions",
+            "OPENAI_TRANSCRIPTIONS_STT_MODEL=sensevoice",
+            "OPENAI_TRANSCRIPTIONS_STT_API_KEY=",
+            "OPENAI_TRANSCRIPTIONS_STT_RESPONSE_FORMAT=verbose_json"
           ].join("\n"),
           action: speech.stt.reachable
             ? "Run pnpm smoke:api:speech after STT provider or voice API changes."
@@ -85,6 +92,12 @@ export class SettingsService {
           capability: "Synthesize assistant text into audio after the normal agent response",
           envVars: [
             "SPEECH_TTS_PROVIDER",
+            "MINIMAX_API_KEY",
+            "MINIMAX_GROUP_ID",
+            "MINIMAX_TTS_URL",
+            "MINIMAX_TTS_MODEL",
+            "MINIMAX_TTS_VOICE_ID",
+            "MINIMAX_TTS_FORMAT",
             "GPT_SOVITS_TTS_URL",
             "GPT_SOVITS_REF_AUDIO_PATH",
             "GPT_SOVITS_PROMPT_TEXT",
@@ -93,18 +106,28 @@ export class SettingsService {
             "GPT_SOVITS_TEXT_SPLIT_METHOD"
           ],
           envTemplate: [
-            "SPEECH_TTS_PROVIDER=gpt-sovits-api",
-            "GPT_SOVITS_TTS_URL=http://127.0.0.1:9880/tts",
-            "GPT_SOVITS_REF_AUDIO_PATH=",
-            "GPT_SOVITS_PROMPT_TEXT=",
-            "GPT_SOVITS_TEXT_LANG=zh",
-            "GPT_SOVITS_PROMPT_LANG=zh",
-            "GPT_SOVITS_TEXT_SPLIT_METHOD=cut0"
+            "# Cloud TTS path for machines that cannot run GPT-SoVITS locally.",
+            "SPEECH_TTS_PROVIDER=minimax-t2a-v2",
+            "MINIMAX_TTS_URL=https://api.minimax.chat/v1/t2a_v2",
+            "MINIMAX_API_KEY=",
+            "MINIMAX_GROUP_ID=",
+            "MINIMAX_TTS_MODEL=speech-02-hd",
+            "MINIMAX_TTS_VOICE_ID=",
+            "MINIMAX_TTS_FORMAT=mp3",
+            "",
+            "# Optional local TTS path.",
+            "# SPEECH_TTS_PROVIDER=gpt-sovits-api",
+            "# GPT_SOVITS_TTS_URL=http://127.0.0.1:9880/tts",
+            "# GPT_SOVITS_REF_AUDIO_PATH=",
+            "# GPT_SOVITS_PROMPT_TEXT=",
+            "# GPT_SOVITS_TEXT_LANG=zh",
+            "# GPT_SOVITS_PROMPT_LANG=zh",
+            "# GPT_SOVITS_TEXT_SPLIT_METHOD=cut0"
           ].join("\n"),
           action: speech.tts.reachable
             ? "Run pnpm smoke:api:speech after TTS provider or voice API changes."
-            : "Configure SPEECH_TTS_PROVIDER and the selected TTS provider environment variables, then restart the API.",
-          docsHint: speech.tts.degradedReason ?? "TTS is optional; typed chat must remain usable when TTS is missing."
+            : "Configure SPEECH_TTS_PROVIDER=minimax-t2a-v2 for cloud TTS, or gpt-sovits-api for a local service, then restart the API.",
+          docsHint: speech.tts.degradedReason ?? "TTS is optional; cloud TTS is supported through the same API-owned speech boundary."
         }
       ]
     };

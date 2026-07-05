@@ -17,8 +17,8 @@ Old Web3/research code has been removed from the active project. Do not restore 
 - Keep write/provider/destructive capability execution behind the API-owned approval queue. Extension calls can request approval, but approved API/user action must execute the privileged step.
 - LangGraph may be introduced later as a workflow engine inside complex skills, but it must not bypass the local API gateway, permission model, memory layer, or extension registry.
 - Add first-class long-term memory as an app-owned layer. Memory should be persisted, searchable, auditable, and exposed to runtimes only through typed tools.
-- Chat sessions and memory entries currently persist to local JSON under `SP_AGENT_DATA_DIR` or `.sp-agent-data`.
-- Speech is now a core chat interaction path, not a separate agent runtime. Implement it through API-owned STT/TTS provider boundaries after preserving typed chat, durable sessions, memory retrieval, and basic skill/workflow behavior. Current optional provider adapters are `openai-compatible-stt` and `gpt-sovits-api`.
+- Chat sessions persist to PostgreSQL when `DATABASE_URL` is configured, with local JSON fallback under `SP_AGENT_DATA_DIR` or `.sp-agent-data` only when the database is unavailable. Memory entries currently persist to local JSON under `SP_AGENT_DATA_DIR` or `.sp-agent-data`.
+- Speech is now a core chat interaction path, not a separate agent runtime. Implement it through API-owned STT/TTS provider boundaries after preserving typed chat, durable sessions, memory retrieval, and basic skill/workflow behavior. Keep two supported provider tracks: self-hosted FunASR STT plus GPT-SoVITS TTS, or cloud MiniMax TTS paired with an OpenAI-compatible transcription endpoint.
 
 ## Architecture Principles
 
@@ -60,7 +60,7 @@ Old Web3/research code has been removed from the active project. Do not restore 
 - When adding LangGraph or connector-backed skills, add tests around the graph/connector contract and keep the implementation behind an extension adapter with permission audit.
 - When changing memory, run `pnpm smoke:api:memory` and verify create/search/forget behavior before wiring more model access.
 - Memory search changes must preserve matched terms and ranking signals; memory write changes must preserve conflict metadata and audit provenance.
-- When changing speech, keep it behind API-owned provider readiness, transcript provenance, memory policy, and audit. Run `pnpm smoke:api:speech` plus the relevant chat/memory/runtime smokes.
+- When changing speech, keep it behind API-owned provider readiness, transcript provenance, memory policy, and audit. Keep provider documentation in `ARCHITECTURE.md` and `PROCESS.md`, not separate speech handoff docs. Run `pnpm smoke:api:speech`, `pnpm smoke:speech:providers`, and the relevant chat/memory/runtime smokes.
 - When changing renderer navigation or shell layout, preserve stable `data-testid` anchors and run `pnpm smoke:web:routes` after `pnpm build`.
 - When changing Electron startup behavior, run `pnpm smoke:desktop:preflight` and `pnpm smoke:desktop:api-child` after `pnpm build`; GUI re-smoke with `pnpm --filter @sp-agent/desktop start` when approval is available and confirm the built renderer, `Base ready`, `pi`, extension count, and a rendered chat response.
 - Do not prioritize browser-level click automation unless UI regressions become a real blocker.

@@ -83,15 +83,22 @@ Complete when:
 - Extension registry exposes `core.agent-shell`, active `local.memory`, active `local.context`, active `local.project`, active `local.bookmarks`, and readiness-gated `local.speech`.
 - `web3.research`, `web3.market`, report, knowledge, watchlist, queue, and worker routes are no longer active.
 - Web3/research source packages, API modules, web components, and smoke scripts were deleted from the active checkout.
-- Chat sessions persist to local JSON.
+- Stale API-local runtime data directories `apps/api/.data` and `apps/api/.sp-agent-data` were deleted. Active local JSON fallback state belongs under `SP_AGENT_DATA_DIR` or root `.sp-agent-data`, and old LanceDB/Web3 `.data` files should not be recreated.
+- Chat sessions persist to PostgreSQL when `DATABASE_URL` is configured, with local JSON fallback only when the database is unavailable.
 - Frontend thread list is backed by API chat sessions through assistant-ui `RemoteThreadListRuntime` and `ThreadListPrimitive`.
-- Frontend agent turns use assistant-ui `LocalRuntime` with a `ChatModelAdapter` that calls `/api/agent/messages`.
+- Frontend agent turns use assistant-ui `LocalRuntime` with a `ChatModelAdapter` that calls `/api/agent/messages/stream` and renders SSE deltas incrementally.
 - Frontend thread history uses a thread-scoped assistant-ui `ThreadHistoryAdapter` that loads persisted API session messages.
+- Frontend remote-thread creation now preserves the assistant-ui local thread id to API chat session id mapping, so agent turns and voice turns send the real remote session id instead of creating duplicate backend sessions with the same generated title.
+- New assistant-ui threads render `New Chat` as the header and sidebar placeholder while the first response/title generation is pending, then replace it with the generated summary title.
 - Frontend styling now has Tailwind CSS v4 and shadcn/base UI initialized in `apps/web`, with shadcn `button`, `sheet`, `tooltip`, and `dropdown-menu` components available.
 - Tailwind CSS v4 now maps shadcn theme tokens through `@theme inline`, so shadcn/base UI popovers, dropdowns, sheets, and tooltips generate the expected background, foreground, border, ring, and radius utilities.
+- The renderer chat shell now follows the official assistant-ui/shadcn style boundary more closely: `ThreadPrimitive`, `ComposerPrimitive`, thread list, sidebar, and header styling live mostly in component Tailwind classes, while `styles.css` is limited to Tailwind/shadcn setup, theme tokens, global resets, and project-specific approval/voice overlay styles.
 - The assistant-ui shell now includes real desktop sidebar collapse, mobile sheet navigation, dynamic thread title, model dropdown shell, scroll-to-bottom control, basic message actions, and two-level welcome suggestions that can send prompts through the assistant-ui runtime.
 - `PATCH /api/chat/sessions/:id` updates session titles for assistant-ui thread rename/title generation.
+- `DELETE /api/chat/sessions/:id` deletes PostgreSQL-backed chat sessions and their messages.
 - `POST /api/agent/messages` persists both user and assistant messages to the chat session.
+- `POST /api/agent/messages/stream` returns real `text/event-stream` events for model deltas and persists the final assistant message when the runtime completes.
+- Pi runtime configuration is intentionally scoped to SiliconFlow for now: `SILICONFLOW_API_KEY` is the only model-provider key path, and the misleading `PI_API_KEY` fallback was removed from runtime code, env templates, readiness copy, and smokes.
 - `local.memory` is active with local JSON-backed write candidates, search, source/provenance metadata, promotion, update, merge, conflict detection/resolution audit events, stronger ranking signals, and tombstone deletion.
 - Write/provider extension invocations return `pending_approval` and require an approved `approvalId` before execution.
 - `packages/shared` now contains only generic agent/chat/settings/extension contracts.
@@ -106,6 +113,7 @@ Complete when:
 - `pnpm smoke:api:pi-live` verifies the Nest API can call Pi/SiliconFlow and persist the live conversation.
 - Browser-level built web verification passes against the live API: the page shows `Base ready`, sends a message, and renders a Pi response.
 - Electron desktop issues found during GUI smoke were fixed: the shell no longer auto-loads a stale `127.0.0.1:5173` dev server, and the API child process now uses a real Node executable instead of Electron's Node mode so Pi SDK can load.
+- Electron now stops its API child process when all windows are closed, including on macOS, so closing and reopening the desktop shell does not keep reusing an old in-memory API bundle during local development.
 - Electron desktop registers DevTools shortcuts on the renderer window: `F12` and `Cmd/Ctrl+Option/Alt+I` toggle DevTools for local debugging.
 - Electron GUI smoke now passes: `pnpm --filter @sp-agent/desktop start` opens the built assistant-ui Base screen, shows `Base ready`, exposes `pi` plus the extension count, sends a chat message, and renders a Pi/SiliconFlow response.
 - `local.context` is the first non-voice read-only skill behind the extension boundary; `pnpm smoke:api:extensions` verifies registry, invocation, and permission audit.
@@ -113,14 +121,17 @@ Complete when:
 - `pnpm smoke:desktop:api-child` verifies the same Node child-process strategy Electron uses can load the Pi SDK and read the extension registry.
 - The renderer header shows the active extension count so the shell exposes extension capacity without adding a complex workbench UI.
 - The renderer header includes an approval review entry with pending count, a right-side review panel, and approve/deny actions backed by `/api/approvals`.
-- `packages/speech` defines STT/TTS provider adapter contracts with deterministic smoke adapters, explicit degraded states, `openai-compatible-stt`, and `gpt-sovits-api`.
+- `packages/speech` defines STT/TTS provider adapter contracts with deterministic smoke adapters, explicit degraded states, `openai-audio-transcriptions-stt`, legacy `openai-compatible-stt`, self-hosted `gpt-sovits-api`, and cloud `minimax-t2a-v2`.
 - API voice endpoints exist for Phase 1 half-duplex chat: `GET /api/voice/status`, `POST /api/voice/transcribe`, `POST /api/voice/synthesize`, and `POST /api/voice/chat`.
 - Voice chat reuses the existing agent message path after STT, so transcripts get normal session persistence, memory retrieval, runtime behavior, and skill boundaries.
 - Voice transcript messages are persisted with provenance metadata (`source: voice`, `sttProvider`, `audioPersisted: false`), and raw audio is not persisted.
 - `GET /api/settings/readiness` exposes dynamic `speech-stt` and `speech-tts` provider readiness.
 - `GET /api/voice/audit` exposes local voice audit events for transcribe/synthesize requested, completed, and degraded states.
-- Renderer composer mic opens a dedicated voice call overlay wired to the API-owned voice chat path with recording, sending, playing, transcript, assistant response, and degraded UI states. Missing speech providers keep typed chat usable and show a degraded voice state.
+- Renderer composer mic opens a dedicated voice call overlay wired to the API-owned voice chat path with recording, sending, playing, transcript, assistant response, provider readiness, latest voice audit event, and degraded UI states. Missing speech providers keep typed chat usable and show a degraded voice state.
 - `pnpm smoke:api:speech` verifies deterministic STT/TTS, dynamic `local.speech` readiness, settings readiness, voice audit events, voice chat session persistence, and audio non-persistence metadata.
+- `pnpm smoke:speech:providers` verifies OpenAI audio transcriptions STT, legacy `openai-compatible-stt`, `gpt-sovits-api`, and `minimax-t2a-v2` against local mock HTTP providers, including request payloads, response parsing, binary audio handling, and degraded HTTP/provider-error/empty-response paths.
+- `pnpm smoke:speech:live` is available for explicit live provider checks. It skips by default and only calls configured real STT/TTS providers when `SPEECH_PROVIDER_LIVE_SMOKE=1` is set.
+- Speech provider setup is documented in `ARCHITECTURE.md`: either self-host FunASR STT plus GPT-SoVITS TTS, or use MiniMax cloud TTS with an OpenAI-compatible transcription endpoint.
 
 ## Current Gaps
 
@@ -128,7 +139,7 @@ Complete when:
 2. Workflow runner remains local-JSON backed and in-process for execution; it now has async start and stale recovery, but durable cross-process workers are still future hardening.
 3. Connector boundary is implemented with `local.bookmarks`; additional real personal-service connectors still need per-connector permission and audit design.
 4. `local-deterministic` proves a second adapter path, but additional live provider adapters should wait for a real provider/use case.
-5. Speech Phase 1 half-duplex shell is implemented with deterministic providers, renderer recording/playback UI, `openai-compatible-stt`, `gpt-sovits-api`, settings readiness, and voice audit events; live local provider validation and settings UI remain.
+5. Speech Phase 1 half-duplex shell is implemented with deterministic providers, renderer recording/playback UI, FunASR-compatible transcription, local GPT-SoVITS TTS, cloud MiniMax TTS, settings readiness, and voice audit events; live provider validation and settings UI remain.
 
 ## OpenClaw-Style Optimization Direction
 
@@ -180,7 +191,7 @@ Delivered:
 - Old workbench routes are removed from the active router.
 - Route smoke verifies only `/` and `/chat`.
 - Frontend thread list loads from `GET /api/chat/sessions`.
-- New Thread creates sessions through `POST /api/chat/sessions`.
+- New Thread creates an assistant-ui local thread first; the backend chat session is created on the first agent turn with the same remote id so empty duplicate sessions are not persisted.
 - Agent turns persist user and assistant messages into the selected session.
 
 Latest verification:
@@ -188,6 +199,7 @@ Latest verification:
 - `pnpm typecheck`
 - `pnpm build`
 - `pnpm smoke:web:routes`
+- Route smoke now validates the Tailwind/shadcn theme tokens plus retained approval/voice CSS markers instead of requiring the removed legacy `.baseShell` stylesheet marker.
 - Approval UI anchors are included in `pnpm smoke:web:routes`.
 - Browser visual check at desktop `1280x720` and mobile `390x844`: no missing core anchors and no horizontal overflow.
 - `pnpm --filter @sp-agent/web build`
@@ -267,20 +279,29 @@ Acceptance:
 
 ### Phase 5: Speech Layer
 
-Status: Phase 1 half-duplex shell implemented; Phase 2 provider readiness and voice audit foundations are implemented; first real provider adapters still require configured live services.
+Status: Phase 1 half-duplex shell implemented; provider readiness, voice audit foundations, mock provider-contract coverage, self-hosted and cloud TTS adapter support, and gated live-provider smoke are implemented. Real voice use still requires one configured provider track.
 
 Deliverables:
 
 - Add `packages/speech` for STT/TTS provider contracts. Done.
 - Add API voice session flow for half-duplex chat. Done for missing, deterministic, and optional provider paths.
 - Add renderer record/transcribe/send/playback flow. Done through the dedicated voice call overlay on the API-owned voice path.
-- Add provider readiness for STT/TTS. Done for missing, deterministic, `openai-compatible-stt`, and `gpt-sovits-api`.
+- Add provider readiness for STT/TTS. Done for missing, deterministic, `openai-audio-transcriptions-stt`, legacy `openai-compatible-stt`, `gpt-sovits-api`, and `minimax-t2a-v2`.
 - Add speech audit events. Done for transcribe/synthesize requested, completed, and degraded states.
+- Add provider adapter contract smoke. Done for OpenAI audio transcriptions STT, legacy `openai-compatible-stt`, `gpt-sovits-api`, and `minimax-t2a-v2` through local mock HTTP providers.
+- Add gated live provider smoke. Done with `pnpm smoke:speech:live`; set `SPEECH_PROVIDER_LIVE_SMOKE=1` and provider env to execute real STT/TTS calls.
 - Keep raw audio persistence disabled by default. Done in API metadata/policy.
+
+Supported live provider tracks:
+
+- Self-hosted: `SPEECH_STT_PROVIDER=openai-audio-transcriptions-stt` pointed at FunASR's `/v1/audio/transcriptions`, plus `SPEECH_TTS_PROVIDER=gpt-sovits-api` pointed at GPT-SoVITS `/tts`.
+- Cloud TTS: `SPEECH_TTS_PROVIDER=minimax-t2a-v2` with MiniMax keys, plus an OpenAI-compatible transcription endpoint for STT.
 
 Acceptance:
 
 - `pnpm smoke:api:speech`
+- `pnpm smoke:speech:providers`
+- `pnpm smoke:speech:live` skips unless `SPEECH_PROVIDER_LIVE_SMOKE=1`
 - Text chat still works through the same `/api/agent/messages` path.
 - Renderer can complete record -> transcript -> agent -> playback with one provider or explicit degraded reason.
 
@@ -296,6 +317,8 @@ pnpm smoke:api:extensions
 pnpm smoke:api:memory
 pnpm smoke:api:workflows
 pnpm smoke:api:speech
+pnpm smoke:speech:providers
+pnpm smoke:speech:live
 pnpm smoke:desktop:preflight
 pnpm smoke:desktop:api-child
 pnpm smoke:web:routes
@@ -316,10 +339,18 @@ Future memory checks:
 pnpm smoke:api:memory
 ```
 
-Current speech checks:
+Speech checks:
 
 ```bash
 pnpm smoke:api:speech
+pnpm smoke:speech:providers
+pnpm smoke:speech:live
+```
+
+Live speech provider check after the self-hosted or cloud provider track is configured:
+
+```bash
+SPEECH_PROVIDER_LIVE_SMOKE=1 pnpm smoke:speech:live
 ```
 
 ## Working Rules

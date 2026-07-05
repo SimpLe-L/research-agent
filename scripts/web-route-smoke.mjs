@@ -14,10 +14,18 @@ const requiredBundleMarkers = [
   "assistant-composer",
   "voice-slot",
   "voice-call-overlay",
+  "voice-readiness",
+  "voice-audit-summary",
   "data-voice-state",
   "/voice/chat",
+  "/agent/messages/stream",
+  "assistant-message-actions",
+  "assistant-copy-action",
+  "copyDone",
+  "thread-actions-button",
+  "thread-archive-action",
+  "thread-delete-action",
   "model-tabs",
-  "prompt-chips",
   "provider-status-button",
   "extension-count",
   "approval-review-button",
@@ -68,7 +76,9 @@ async function main() {
   const cssAssets = assetPaths.filter((asset) => asset.endsWith(".css"));
   for (const asset of cssAssets) {
     const css = await readText(`${base}/${asset}`);
-    assert(css.includes(".baseShell"), `${asset} did not include base shell styles`);
+    assert(css.includes("--color-background"), `${asset} did not include shadcn theme tokens`);
+    assert(css.includes(".voiceCallBackdrop"), `${asset} did not include voice overlay styles`);
+    assert(css.includes(".approvalSheet"), `${asset} did not include approval panel styles`);
   }
 
   await stopPreview();

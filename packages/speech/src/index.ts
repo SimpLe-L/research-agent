@@ -115,6 +115,64 @@ const openAiCompatibleSttAdapter: SttProviderAdapter = {
   }
 };
 
+const openAiAudioTranscriptionsSttAdapter: SttProviderAdapter = {
+  id: "openai-audio-transcriptions-stt",
+  label: "OpenAI Audio Transcriptions STT",
+  getStatus: async (env = process.env) => {
+    const missing = missingOpenAiAudioTranscriptionsConfig(env);
+    return {
+      name: "openai-audio-transcriptions-stt",
+      configured: missing.length === 0,
+      reachable: missing.length === 0,
+      degradedReason: missing.length > 0 ? `OpenAI audio transcriptions STT is missing ${missing.join(", ")}.` : undefined
+    };
+  },
+  transcribe: async (input, env = process.env) => {
+    const missing = missingOpenAiAudioTranscriptionsConfig(env);
+    if (missing.length > 0) {
+      return {
+        provider: "openai-audio-transcriptions-stt",
+        degradedReason: `OpenAI audio transcriptions STT is missing ${missing.join(", ")}.`
+      };
+    }
+
+    try {
+      const audioBytes = Buffer.from(input.audioBase64, "base64");
+      const formData = new FormData();
+      formData.append("file", new Blob([audioBytes], { type: input.mimeType }), env.OPENAI_TRANSCRIPTIONS_STT_FILENAME || "audio.webm");
+      formData.append("model", requiredEnv(env.OPENAI_TRANSCRIPTIONS_STT_MODEL));
+      if (env.OPENAI_TRANSCRIPTIONS_STT_RESPONSE_FORMAT) formData.append("response_format", env.OPENAI_TRANSCRIPTIONS_STT_RESPONSE_FORMAT);
+      if (env.OPENAI_TRANSCRIPTIONS_STT_LANGUAGE) formData.append("language", env.OPENAI_TRANSCRIPTIONS_STT_LANGUAGE);
+
+      const headers: Record<string, string> = {};
+      if (env.OPENAI_TRANSCRIPTIONS_STT_API_KEY) headers.authorization = `Bearer ${env.OPENAI_TRANSCRIPTIONS_STT_API_KEY}`;
+      const response = await fetch(requiredEnv(env.OPENAI_TRANSCRIPTIONS_STT_URL), {
+        method: "POST",
+        headers,
+        body: formData
+      });
+      if (!response.ok) {
+        return {
+          provider: "openai-audio-transcriptions-stt",
+          degradedReason: `OpenAI audio transcriptions STT returned HTTP ${response.status}: ${await response.text()}`
+        };
+      }
+      const contentType = response.headers.get("content-type") ?? "";
+      const transcript = contentType.includes("application/json")
+        ? extractTranscriptionText(await response.json() as Record<string, unknown>)
+        : (await response.text()).trim();
+      return transcript
+        ? { transcript, provider: "openai-audio-transcriptions-stt" }
+        : { provider: "openai-audio-transcriptions-stt", degradedReason: "OpenAI audio transcriptions STT response did not include transcript text." };
+    } catch (error) {
+      return {
+        provider: "openai-audio-transcriptions-stt",
+        degradedReason: error instanceof Error ? error.message : "OpenAI audio transcriptions STT request failed."
+      };
+    }
+  }
+};
+
 const missingTtsAdapter: TtsProviderAdapter = {
   id: "missing",
   label: "Missing TTS",
@@ -195,8 +253,73 @@ const gptSovitsApiTtsAdapter: TtsProviderAdapter = {
   }
 };
 
-const sttAdapters: SttProviderAdapter[] = [missingSttAdapter, deterministicSttAdapter, openAiCompatibleSttAdapter];
-const ttsAdapters: TtsProviderAdapter[] = [missingTtsAdapter, deterministicTtsAdapter, gptSovitsApiTtsAdapter];
+const minimaxT2aV2TtsAdapter: TtsProviderAdapter = {
+  id: "minimax-t2a-v2",
+  label: "MiniMax T2A v2",
+  getStatus: async (env = process.env) => {
+    const missing = missingMinimaxTtsConfig(env);
+    return {
+      name: "minimax-t2a-v2",
+      configured: missing.length === 0,
+      reachable: missing.length === 0,
+      degradedReason: missing.length > 0 ? `MiniMax T2A v2 is missing ${missing.join(", ")}.` : undefined
+    };
+  },
+  synthesize: async (input, env = process.env) => {
+    const missing = missingMinimaxTtsConfig(env);
+    if (missing.length > 0) {
+      return {
+        provider: "minimax-t2a-v2",
+        degradedReason: `MiniMax T2A v2 is missing ${missing.join(", ")}.`
+      };
+    }
+
+    try {
+      const response = await fetch(buildMinimaxTtsUrl(env), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${requiredEnv(env.MINIMAX_API_KEY)}`
+        },
+        body: JSON.stringify(buildMinimaxTtsPayload(input, env))
+      });
+      const text = await response.text();
+      if (!response.ok) {
+        return {
+          provider: "minimax-t2a-v2",
+          degradedReason: `MiniMax T2A v2 returned HTTP ${response.status}: ${text}`
+        };
+      }
+      const json = text ? JSON.parse(text) as Record<string, unknown> : {};
+      const error = extractMinimaxError(json);
+      if (error) {
+        return {
+          provider: "minimax-t2a-v2",
+          degradedReason: error
+        };
+      }
+      const audioBase64 = extractMinimaxAudioBase64(json);
+      return audioBase64
+        ? {
+            audioBase64,
+            mimeType: mimeTypeFromAudioFormat(env.MINIMAX_TTS_FORMAT || "mp3"),
+            provider: "minimax-t2a-v2"
+          }
+        : {
+            provider: "minimax-t2a-v2",
+            degradedReason: "MiniMax T2A v2 response did not include audio data."
+          };
+    } catch (error) {
+      return {
+        provider: "minimax-t2a-v2",
+        degradedReason: error instanceof Error ? error.message : "MiniMax T2A v2 request failed."
+      };
+    }
+  }
+};
+
+const sttAdapters: SttProviderAdapter[] = [missingSttAdapter, deterministicSttAdapter, openAiCompatibleSttAdapter, openAiAudioTranscriptionsSttAdapter];
+const ttsAdapters: TtsProviderAdapter[] = [missingTtsAdapter, deterministicTtsAdapter, gptSovitsApiTtsAdapter, minimaxT2aV2TtsAdapter];
 
 export function listSttProviderAdapters(): SttProviderAdapter[] {
   return sttAdapters;
@@ -240,8 +363,16 @@ function missingOpenAiCompatibleSttConfig(env: NodeJS.ProcessEnv): string[] {
   return ["OPENAI_COMPATIBLE_STT_URL", "OPENAI_COMPATIBLE_STT_API_KEY", "OPENAI_COMPATIBLE_STT_MODEL"].filter((key) => !env[key]);
 }
 
+function missingOpenAiAudioTranscriptionsConfig(env: NodeJS.ProcessEnv): string[] {
+  return ["OPENAI_TRANSCRIPTIONS_STT_URL", "OPENAI_TRANSCRIPTIONS_STT_MODEL"].filter((key) => !env[key]);
+}
+
 function missingGptSovitsConfig(env: NodeJS.ProcessEnv): string[] {
   return ["GPT_SOVITS_TTS_URL", "GPT_SOVITS_REF_AUDIO_PATH", "GPT_SOVITS_PROMPT_TEXT"].filter((key) => !env[key]);
+}
+
+function missingMinimaxTtsConfig(env: NodeJS.ProcessEnv): string[] {
+  return ["MINIMAX_API_KEY", "MINIMAX_GROUP_ID", "MINIMAX_TTS_MODEL", "MINIMAX_TTS_VOICE_ID"].filter((key) => !env[key]);
 }
 
 function requiredEnv(value: string | undefined): string {
@@ -263,6 +394,27 @@ function extractAsrText(content: string): string | undefined {
   return text || undefined;
 }
 
+function extractTranscriptionText(json: Record<string, unknown>): string | undefined {
+  if (typeof json.text === "string") return json.text.trim() || undefined;
+  const results = json.results;
+  if (Array.isArray(results)) {
+    const text = results
+      .map((item) => typeof item === "object" && item !== null && "text" in item ? String((item as Record<string, unknown>).text ?? "") : "")
+      .join(" ")
+      .trim();
+    if (text) return text;
+  }
+  const segments = json.segments;
+  if (Array.isArray(segments)) {
+    const text = segments
+      .map((item) => typeof item === "object" && item !== null && "text" in item ? String((item as Record<string, unknown>).text ?? "") : "")
+      .join(" ")
+      .trim();
+    if (text) return text;
+  }
+  return undefined;
+}
+
 function buildGptSovitsPayload(input: VoiceSynthesizeInput, env: NodeJS.ProcessEnv): Record<string, unknown> {
   const payload: Record<string, unknown> = {
     text: input.text,
@@ -276,4 +428,62 @@ function buildGptSovitsPayload(input: VoiceSynthesizeInput, env: NodeJS.ProcessE
   };
   if (env.GPT_SOVITS_TEXT_SPLIT_METHOD) payload.text_split_method = env.GPT_SOVITS_TEXT_SPLIT_METHOD;
   return payload;
+}
+
+function buildMinimaxTtsUrl(env: NodeJS.ProcessEnv): string {
+  const baseUrl = env.MINIMAX_TTS_URL || "https://api.minimax.chat/v1/t2a_v2";
+  const url = new URL(baseUrl);
+  if (!url.searchParams.has("GroupId")) {
+    url.searchParams.set("GroupId", requiredEnv(env.MINIMAX_GROUP_ID));
+  }
+  return url.toString();
+}
+
+function buildMinimaxTtsPayload(input: VoiceSynthesizeInput, env: NodeJS.ProcessEnv): Record<string, unknown> {
+  return {
+    model: requiredEnv(env.MINIMAX_TTS_MODEL),
+    text: input.text,
+    stream: false,
+    voice_setting: {
+      voice_id: input.voice || requiredEnv(env.MINIMAX_TTS_VOICE_ID),
+      speed: Number(env.MINIMAX_TTS_SPEED || "1"),
+      vol: Number(env.MINIMAX_TTS_VOLUME || "1"),
+      pitch: Number(env.MINIMAX_TTS_PITCH || "0")
+    },
+    audio_setting: {
+      sample_rate: Number(env.MINIMAX_TTS_SAMPLE_RATE || "32000"),
+      bitrate: Number(env.MINIMAX_TTS_BITRATE || "128000"),
+      format: env.MINIMAX_TTS_FORMAT || "mp3",
+      channel: Number(env.MINIMAX_TTS_CHANNEL || "1")
+    }
+  };
+}
+
+function extractMinimaxError(json: Record<string, unknown>): string | undefined {
+  const baseResp = json.base_resp as Record<string, unknown> | undefined;
+  const statusCode = Number(baseResp?.status_code ?? 0);
+  if (statusCode === 0) return undefined;
+  const statusMsg = typeof baseResp?.status_msg === "string" ? baseResp.status_msg : "MiniMax T2A v2 returned a provider error.";
+  return `MiniMax T2A v2 provider error ${statusCode}: ${statusMsg}`;
+}
+
+function extractMinimaxAudioBase64(json: Record<string, unknown>): string | undefined {
+  const data = json.data as Record<string, unknown> | undefined;
+  const audio = data?.audio;
+  if (typeof audio !== "string" || !audio) return undefined;
+  return /^[0-9a-fA-F]+$/.test(audio) ? Buffer.from(audio, "hex").toString("base64") : audio;
+}
+
+function mimeTypeFromAudioFormat(format: string): string {
+  switch (format.toLowerCase()) {
+    case "wav":
+      return "audio/wav";
+    case "pcm":
+      return "audio/L16";
+    case "flac":
+      return "audio/flac";
+    case "mp3":
+    default:
+      return "audio/mpeg";
+  }
 }

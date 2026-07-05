@@ -36,7 +36,6 @@ import {
   Mic,
   MoreHorizontal,
   PanelLeft,
-  PenLine,
   Plus,
   RefreshCw,
   Share,
@@ -44,7 +43,9 @@ import {
   Square,
   X,
   Upload,
-  CloudSun
+  Archive,
+  CloudSun,
+  Trash2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -87,6 +88,12 @@ type AgentMessageResponse = {
   toolCalls?: Array<Record<string, unknown>>;
 };
 
+type AgentStreamEvent =
+  | { type: "metadata"; sessionId: string; memoryContextCount: number }
+  | { type: "text_delta"; text: string }
+  | { type: "done"; sessionId: string; result: AgentMessageResponse }
+  | { type: "error"; message: string };
+
 type VoiceStatus = {
   ready: boolean;
   degradedReason?: string;
@@ -101,6 +108,26 @@ type VoiceChatResponse = {
   audioBase64?: string;
   mimeType?: string;
   degradedReason?: string;
+};
+
+type ProviderReadinessItem = {
+  id: string;
+  label: string;
+  status: "ready" | "missing" | "degraded" | "manual";
+  capability: string;
+  envVars: string[];
+  action: string;
+  docsHint?: string;
+};
+
+type VoiceAuditEvent = {
+  id: string;
+  action: string;
+  sessionId?: string;
+  provider?: string;
+  status: "requested" | "completed" | "degraded";
+  degradedReason?: string;
+  createdAt: string;
 };
 
 const pendingVoiceResponses = new Map<string, VoiceChatResponse>();
@@ -134,6 +161,59 @@ function latestUserText(messages: readonly ThreadMessage[]): string {
   return textParts.join("\n").trim();
 }
 
+async function* streamAssistantText(text: string, abortSignal?: AbortSignal) {
+  const chars = Array.from(text);
+  const chunkSize = chars.length > 240 ? 4 : chars.length > 120 ? 3 : 2;
+  let visible = "";
+  for (let index = 0; index < chars.length; index += chunkSize) {
+    if (abortSignal?.aborted) return;
+    visible += chars.slice(index, index + chunkSize).join("");
+    yield { content: [{ type: "text" as const, text: visible }] };
+    await new Promise((resolve) => setTimeout(resolve, 12));
+  }
+  if (visible !== text && !abortSignal?.aborted) {
+    yield { content: [{ type: "text" as const, text }] };
+  }
+}
+
+async function* readSseEvents(response: Response, abortSignal?: AbortSignal): AsyncGenerator<AgentStreamEvent> {
+  if (!response.body) throw new Error("Agent stream response did not include a readable body.");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (true) {
+      if (abortSignal?.aborted) return;
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let boundary = buffer.indexOf("\n\n");
+      while (boundary >= 0) {
+        const rawEvent = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        const event = parseSseEvent(rawEvent);
+        if (event) yield event;
+        boundary = buffer.indexOf("\n\n");
+      }
+    }
+    buffer += decoder.decode();
+    const event = parseSseEvent(buffer);
+    if (event) yield event;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function parseSseEvent(rawEvent: string): AgentStreamEvent | null {
+  const data = rawEvent
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).trimStart())
+    .join("\n");
+  if (!data) return null;
+  return JSON.parse(data) as AgentStreamEvent;
+}
+
 function makeThreadTitle(content: string) {
   const clean = content.replace(/\s+/g, " ").trim();
   if (!clean) return "New Chat";
@@ -148,11 +228,12 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 function toThreadMetadata(thread: ThreadRecord) {
+  apiSessionIdsByThreadId.set(thread.id, thread.id);
   return {
     status: "regular" as const,
     remoteId: thread.id,
     externalId: thread.id,
-    title: thread.title,
+    title: normalizeThreadTitle(thread.title),
     lastMessageAt: new Date(thread.updatedAt)
   };
 }
@@ -207,6 +288,12 @@ function firstUserTitle(messages: readonly ThreadMessage[]) {
   return makeThreadTitle(text ?? "");
 }
 
+function normalizeThreadTitle(title: string | undefined) {
+  return title?.trim() || "New Chat";
+}
+
+const apiSessionIdsByThreadId = new Map<string, string>();
+
 function ThreadHistoryProvider({ children }: { children?: React.ReactNode }) {
   const aui = useAui();
   const history = useMemo<ThreadHistoryAdapter>(
@@ -214,7 +301,8 @@ function ThreadHistoryProvider({ children }: { children?: React.ReactNode }) {
       async load() {
         const { remoteId } = aui.threadListItem().getState();
         if (!remoteId) return { messages: [] };
-        const session = await fetchJson<ThreadRecord>(`${apiBase}/chat/sessions/${remoteId}`);
+        const session = await fetchJson<ThreadRecord>(`${apiBase}/chat/sessions/${remoteId}`).catch(() => undefined);
+        if (!session) return { messages: [] };
         const messages = (session.messages ?? [])
           .map(toAssistantThreadMessage)
           .filter((message): message is ThreadMessage => Boolean(message));
@@ -245,13 +333,9 @@ const assistantThreadListAdapter: RemoteThreadListAdapter = {
       threads: data.sessions.map(toThreadMetadata)
     };
   },
-  async initialize() {
-    const thread = await fetchJson<ThreadRecord>(`${apiBase}/chat/sessions`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ title: "New Chat" })
-    });
-    return { remoteId: thread.id, externalId: thread.id };
+  async initialize(threadId) {
+    apiSessionIdsByThreadId.set(threadId, threadId);
+    return { remoteId: threadId, externalId: threadId };
   },
   async rename(remoteId, newTitle) {
     await updateSessionTitle(remoteId, newTitle);
@@ -262,8 +346,10 @@ const assistantThreadListAdapter: RemoteThreadListAdapter = {
   async unarchive() {
     return;
   },
-  async delete() {
-    return;
+  async delete(remoteId) {
+    await fetchJson<{ deleted: boolean; sessionId: string }>(`${apiBase}/chat/sessions/${remoteId}`, {
+      method: "DELETE"
+    });
   },
   async fetch(threadId) {
     const thread = await fetchJson<ThreadRecord>(`${apiBase}/chat/sessions/${threadId}`);
@@ -317,14 +403,17 @@ function App() {
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <TooltipProvider>
-        <main className="baseShell" data-testid="app-shell">
+        <main className="min-h-svh bg-background text-foreground" data-testid="app-shell">
           <section
-            className={cn("baseFrame", sidebarCollapsed && "sidebarCollapsed")}
+            className={cn(
+              "grid h-svh min-h-0 overflow-hidden bg-background transition-[grid-template-columns] duration-200 md:grid-cols-[260px_minmax(0,1fr)]",
+              sidebarCollapsed && "md:grid-cols-[56px_minmax(0,1fr)]"
+            )}
             data-testid="view-chat"
           >
-            <div className="runtimeAnchors" data-testid="model-tabs" aria-hidden="true" />
+            <div className="hidden" data-testid="model-tabs" aria-hidden="true" />
             <AssistantThreadSidebar collapsed={sidebarCollapsed} />
-            <section className="chatSurface" data-testid="agent-thread-panel">
+            <section className="flex min-w-0 flex-col overflow-hidden bg-background" data-testid="agent-thread-panel">
               <ChatHeader
                 sidebarCollapsed={sidebarCollapsed}
                 onToggleSidebar={() => setSidebarCollapsed((value) => !value)}
@@ -358,38 +447,68 @@ function TooltipIconButton({
 
 function Logo({ collapsed = false }: { collapsed?: boolean }) {
   return (
-    <div className={cn("sidebarBrand", collapsed && "collapsed")}>
-      <Bot size={22} />
-      <strong>assistant-ui</strong>
+    <div className={cn("flex h-14 min-w-0 items-center gap-2.5 px-5", collapsed && "justify-center px-0")}>
+      <Bot className="size-5 shrink-0" />
+      <strong className={cn("truncate text-[15px] font-semibold transition-all", collapsed && "w-0 opacity-0")}>
+        assistant-ui
+      </strong>
     </div>
   );
 }
 
 function ThreadListContent({ collapsed = false }: { collapsed?: boolean }) {
   return (
-    <ThreadListPrimitive.Root className={cn("threadListRoot", collapsed && "collapsed")}>
+    <ThreadListPrimitive.Root className={cn("flex min-h-0 flex-1 flex-col px-3 py-2", collapsed && "items-center px-2")}>
       <Tooltip>
         <TooltipTrigger
           render={
             <ThreadListPrimitive.New
-              className={cn("newThreadButton", collapsed && "collapsed")}
+              className={cn(
+                "inline-flex h-10 w-full cursor-pointer items-center gap-2.5 rounded-lg bg-muted px-3 text-left text-sm font-medium text-foreground transition-colors hover:bg-accent",
+                collapsed && "w-10 justify-center px-0"
+              )}
               data-testid="new-thread-button"
             />
           }
         >
-          <Plus size={20} />
-          <span>New Thread</span>
+          <Plus className="size-5 shrink-0" />
+          <span className={cn(collapsed && "hidden")}>New Thread</span>
         </TooltipTrigger>
         {collapsed && <TooltipContent side="right">New Thread</TooltipContent>}
       </Tooltip>
-      {!collapsed && <div className="threadGroupLabel">Today</div>}
-      <div className={cn("threadList", collapsed && "collapsed")} data-testid="thread-list">
+      {!collapsed && <div className="mx-2 mt-6 mb-2 text-xs font-semibold text-muted-foreground">Today</div>}
+      <div className={cn("grid min-h-0 content-start gap-1 overflow-auto", collapsed && "hidden")} data-testid="thread-list">
         <ThreadListPrimitive.Items>
           {() => (
-            <ThreadListItemPrimitive.Root className="threadItemRoot">
-              <ThreadListItemPrimitive.Trigger className="threadItem">
-                <ThreadListItemPrimitive.Title />
-              </ThreadListItemPrimitive.Trigger>
+            <ThreadListItemPrimitive.Root className="min-w-0">
+              <div className="group/thread-item grid min-w-0 grid-cols-[minmax(0,1fr)_30px] items-center rounded-lg hover:bg-accent focus-within:bg-accent has-[[data-active]]:bg-accent has-[[aria-current=true]]:bg-accent">
+                <ThreadListItemPrimitive.Trigger className="block min-h-8 w-full cursor-pointer overflow-hidden truncate rounded-lg bg-transparent px-2.5 py-2 text-left text-sm text-foreground">
+                  <ThreadListItemPrimitive.Title fallback="New Chat" />
+                </ThreadListItemPrimitive.Trigger>
+                <DropdownMenu>
+                  <DropdownMenuTrigger className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground opacity-0 transition hover:bg-muted hover:text-foreground group-hover/thread-item:opacity-100 data-popup-open:opacity-100" title="Thread actions" aria-label="Thread actions" data-testid="thread-actions-button">
+                    <MoreHorizontal className="size-4" />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-36">
+                    <ThreadListItemPrimitive.Archive
+                      render={
+                        <DropdownMenuItem data-testid="thread-archive-action">
+                          <Archive className="size-3.5" />
+                          <span>Archive</span>
+                        </DropdownMenuItem>
+                      }
+                    />
+                    <ThreadListItemPrimitive.Delete
+                      render={
+                        <DropdownMenuItem variant="destructive" data-testid="thread-delete-action">
+                          <Trash2 className="size-3.5" />
+                          <span>Delete</span>
+                        </DropdownMenuItem>
+                      }
+                    />
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
             </ThreadListItemPrimitive.Root>
           )}
         </ThreadListPrimitive.Items>
@@ -400,7 +519,7 @@ function ThreadListContent({ collapsed = false }: { collapsed?: boolean }) {
 
 function AssistantThreadSidebar({ collapsed }: { collapsed: boolean }) {
   return (
-    <aside className={cn("threadSidebar", collapsed && "collapsed")} data-testid="thread-sidebar">
+    <aside className="hidden min-w-0 flex-col overflow-hidden bg-muted/30 md:flex" data-testid="thread-sidebar">
       <Logo collapsed={collapsed} />
       <ThreadListContent collapsed={collapsed} />
     </aside>
@@ -410,11 +529,11 @@ function AssistantThreadSidebar({ collapsed }: { collapsed: boolean }) {
 function MobileSidebar() {
   return (
     <Sheet>
-      <SheetTrigger render={<Button variant="ghost" size="icon" className="mobileMenuButton" />}>
-        <Menu size={18} />
-        <span className="srOnly">Toggle menu</span>
+      <SheetTrigger render={<Button variant="ghost" size="icon" className="inline-flex md:hidden" />}>
+        <Menu className="size-4.5" />
+        <span className="sr-only">Toggle menu</span>
       </SheetTrigger>
-      <SheetContent side="left" className="mobileSheet" showCloseButton={false}>
+      <SheetContent side="left" className="w-[min(320px,86vw)] gap-0 p-0" showCloseButton={false}>
         <Logo />
         <ThreadListContent />
       </SheetContent>
@@ -427,7 +546,7 @@ function ThreadTitle() {
     const item = state.threads.threadItems.find((thread) => thread.id === state.threads.mainThreadId);
     return item?.title;
   });
-  return <strong className="threadTitleText">{title ?? "New Chat"}</strong>;
+  return <strong className="block max-w-[44vw] truncate text-[15px] font-semibold md:max-w-[280px]">{normalizeThreadTitle(title)}</strong>;
 }
 
 function ChatHeader({
@@ -443,32 +562,32 @@ function ChatHeader({
 }) {
   const runtimeLabel = status?.piRuntime?.selectedModel ?? status?.piRuntime?.model ?? status?.piRuntime?.provider ?? "Base";
   return (
-    <header className="chatHeader">
-      <div className="chatTitle">
+    <header className="flex h-13 items-center justify-between gap-2 px-2.5 md:px-4">
+      <div className="flex min-w-0 items-center gap-2">
         <MobileSidebar />
         <TooltipIconButton
           tooltip={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
-          className="sidebarToggle"
+          className="hidden md:inline-flex"
           onClick={onToggleSidebar}
           aria-label={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
         >
-          <PanelLeft size={18} />
+          <PanelLeft className="size-4.5" />
         </TooltipIconButton>
         <ThreadTitle />
       </div>
-      <div className="headerActions">
-        <span className="smallRuntime" data-testid="runtime-label">
+      <div className="flex min-w-0 items-center gap-2">
+        <span className="hidden whitespace-nowrap text-xs text-muted-foreground md:inline" data-testid="runtime-label">
           {runtimeLabel}
         </span>
-        <span className="smallRuntime" data-testid="provider-status-button">
+        <span className="hidden whitespace-nowrap text-xs text-muted-foreground md:inline" data-testid="provider-status-button">
           {statusText}
         </span>
-        <span className="extensionCount" data-testid="extension-count">
+        <span className="hidden rounded-full border px-2.5 py-1 text-xs leading-none text-muted-foreground md:inline" data-testid="extension-count">
           {status?.extensions?.length ?? 0} ext
         </span>
         <ApprovalReview />
-        <TooltipIconButton tooltip="Share" className="iconButton" disabled>
-          <Share size={18} />
+        <TooltipIconButton tooltip="Share" className="text-muted-foreground" disabled>
+          <Share className="size-4.5" />
         </TooltipIconButton>
       </div>
     </header>
@@ -531,7 +650,7 @@ function ApprovalReview() {
         >
           <ShieldCheck size={18} />
           {pending.length > 0 && <span className="approvalBadge" data-testid="approval-pending-count">{pending.length}</span>}
-          <span className="srOnly">Review approvals</span>
+          <span className="sr-only">Review approvals</span>
         </TooltipTrigger>
         <TooltipContent>Review approvals</TooltipContent>
       </Tooltip>
@@ -541,7 +660,7 @@ function ApprovalReview() {
             <h2>Approvals</h2>
             <p>{pending.length} pending request{pending.length === 1 ? "" : "s"}</p>
           </div>
-          <Button variant="ghost" size="icon" className="iconButton" onClick={() => void refreshApprovals()} disabled={loading}>
+          <Button variant="ghost" size="icon" className="text-muted-foreground" onClick={() => void refreshApprovals()} disabled={loading}>
             <RefreshCw size={16} />
           </Button>
         </div>
@@ -597,28 +716,48 @@ function useAgentAssistantRuntime() {
           return;
         }
 
-        const voiceCacheKey = `${unstable_threadId ?? "new"}:${content}`;
+        const apiSessionId = unstable_threadId ? apiSessionIdsByThreadId.get(unstable_threadId) ?? unstable_threadId : undefined;
+        const voiceCacheKey = `${apiSessionId ?? "new"}:${content}`;
         const voiceResponse = pendingVoiceResponses.get(voiceCacheKey);
         if (voiceResponse) {
           pendingVoiceResponses.delete(voiceCacheKey);
           const degraded = voiceResponse.degradedReason ? `\n\n降级原因：${voiceResponse.degradedReason}` : "";
-          yield { content: [{ type: "text", text: `${voiceResponse.assistantText}${degraded}` }] };
+          yield* streamAssistantText(`${voiceResponse.assistantText}${degraded}`, abortSignal);
           return;
         }
 
-        const res = await fetch(`${apiBase}/agent/messages`, {
+        const res = await fetch(`${apiBase}/agent/messages/stream`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ content, sessionId: unstable_threadId }),
+          body: JSON.stringify({ content, sessionId: apiSessionId }),
           signal: abortSignal
         });
-        const data = (await res.json()) as AgentMessageResponse & { message?: string };
-        if (!res.ok) throw new Error(data.message ?? `Agent API returned HTTP ${res.status}`);
-        await updateSessionTitle(data.sessionId, makeThreadTitle(content));
+        if (!res.ok) {
+          const text = await res.text().catch(() => "");
+          throw new Error(text || `Agent API returned HTTP ${res.status}`);
+        }
 
-        const degraded = data.degradedReason ? `\n\n降级原因：${data.degradedReason}` : "";
-        const tools = data.toolCalls?.length ? `\n\n工具调用：${data.toolCalls.length}` : "";
-        yield { content: [{ type: "text", text: `${data.content}${degraded}${tools}` }] };
+        let visibleText = "";
+        let sessionId: string | undefined;
+        for await (const event of readSseEvents(res, abortSignal)) {
+          if (event.type === "metadata") {
+            sessionId = event.sessionId;
+            await updateSessionTitle(event.sessionId, makeThreadTitle(content));
+            continue;
+          }
+          if (event.type === "text_delta") {
+            visibleText += event.text;
+            yield { content: [{ type: "text", text: visibleText }] };
+            continue;
+          }
+          if (event.type === "error") {
+            throw new Error(event.message);
+          }
+          const degraded = event.result.degradedReason ? `\n\n降级原因：${event.result.degradedReason}` : "";
+          const finalText = `${event.result.content}${degraded}`;
+          if (finalText !== visibleText) yield { content: [{ type: "text", text: finalText }] };
+          if (!sessionId) await updateSessionTitle(event.sessionId, makeThreadTitle(content));
+        }
       }
     }),
     []
@@ -636,15 +775,30 @@ function isNewChatView(state: AssistantState) {
 function AssistantThread() {
   const isEmpty = useAuiState(isNewChatView);
   return (
-    <ThreadPrimitive.Root className="assistantUiRoot">
-      <ThreadPrimitive.Viewport className={cn("assistantViewport", isEmpty && "empty")} turnAnchor="top">
-        <div className="assistantMessageStack">
+    <ThreadPrimitive.Root
+      className="aui-root flex min-h-0 flex-1 flex-col bg-background"
+      style={
+        {
+          "--thread-max-width": "44rem",
+          "--composer-bg": "color-mix(in oklab, var(--color-muted) 34%, var(--color-background))",
+          "--composer-radius": "1.5rem",
+          "--composer-padding": "8px"
+        } as React.CSSProperties
+      }
+    >
+      <ThreadPrimitive.Viewport className="relative flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto scroll-smooth px-3 pt-3 md:px-4" turnAnchor="top">
+        <div className={cn("mx-auto flex w-full max-w-(--thread-max-width) flex-1 flex-col gap-6 pt-3 pb-6", isEmpty && "justify-center")}>
           <AssistantEmptyState />
           <ThreadPrimitive.Messages>{() => <AssistantThreadMessage />}</ThreadPrimitive.Messages>
         </div>
-        <ThreadPrimitive.ViewportFooter className={cn("threadViewportFooter", !isEmpty && "sticky")}>
-          <ThreadPrimitive.ScrollToBottom className="scrollToBottomButton" title="Scroll to bottom">
-            <ArrowDown size={16} />
+        <ThreadPrimitive.ViewportFooter
+          className={cn(
+            "mx-auto flex w-full max-w-(--thread-max-width) flex-col gap-3 bg-background pb-5",
+            !isEmpty && "sticky bottom-0 mt-auto rounded-t-(--composer-radius)"
+          )}
+        >
+          <ThreadPrimitive.ScrollToBottom className="absolute -top-11 self-center rounded-full border bg-background p-2 text-foreground shadow-sm disabled:invisible" title="Scroll to bottom">
+            <ArrowDown className="size-4" />
           </ThreadPrimitive.ScrollToBottom>
           <AssistantComposer />
         </ThreadPrimitive.ViewportFooter>
@@ -657,8 +811,10 @@ function AssistantEmptyState() {
   const isEmpty = useAuiState(isNewChatView);
   if (!isEmpty) return null;
   return (
-    <div className="assistantWelcome" data-testid="assistant-empty-state">
-      <h1>How can I help you today?</h1>
+    <div className="mb-2 text-center" data-testid="assistant-empty-state">
+      <h1 className="animate-in fade-in slide-in-from-bottom-1 text-2xl font-semibold duration-200 md:text-[30px]">
+        How can I help you today?
+      </h1>
     </div>
   );
 }
@@ -667,9 +823,35 @@ function AssistantThreadMessage() {
   const role = useAuiState((state) => state.message.role);
   const isRunning = useAuiState((state) => state.message.status?.type === "running");
   return (
-    <MessagePrimitive.Root className={role === "user" ? "messageBubble user" : "messageBubble assistant"}>
-      <AssistantMessageParts />
-      {role === "assistant" && isRunning && <span className="assistantThinking">Connecting</span>}
+    <MessagePrimitive.Root
+      data-role={role}
+      className={cn(
+        "animate-in fade-in slide-in-from-bottom-1 duration-150",
+        role === "user"
+          ? "grid grid-cols-[minmax(72px,1fr)_auto] px-2 [&>*]:col-start-2"
+          : "px-2"
+      )}
+    >
+      <div
+        className={cn(
+          "max-w-[min(100%,740px)] [overflow-wrap:anywhere] text-[15px] leading-relaxed",
+          role === "user"
+            ? "rounded-xl bg-muted px-4 py-2 text-foreground"
+            : "text-foreground"
+        )}
+      >
+        <AssistantMessageParts />
+      </div>
+      {role === "assistant" && isRunning && (
+        <span className="mt-2 inline-flex items-center gap-2.5 text-xs text-muted-foreground">
+          <span className="thinkingGlyph grid size-4 grid-cols-4 gap-0.5" aria-hidden="true">
+            {Array.from({ length: 16 }).map((_, index) => (
+              <span key={index} className="size-0.5 rounded-full bg-current opacity-40" />
+            ))}
+          </span>
+          <span>Connecting</span>
+        </span>
+      )}
       <MessageActions role={role} />
     </MessagePrimitive.Root>
   );
@@ -689,41 +871,34 @@ function AssistantMessageParts() {
 }
 
 function MessageActions({ role }: { role: "user" | "assistant" | "system" | "tool" }) {
-  if (role !== "user" && role !== "assistant") return null;
+  if (role !== "assistant") return null;
   return (
-    <div className="messageActions">
-      <BranchPickerPrimitive.Root hideWhenSingleBranch className="branchPicker">
-        <BranchPickerPrimitive.Previous className="actionIcon">‹</BranchPickerPrimitive.Previous>
+    <div className="mt-1.5 flex min-h-7 items-center gap-1 text-muted-foreground" data-testid="assistant-message-actions">
+      <BranchPickerPrimitive.Root hideWhenSingleBranch className="inline-flex items-center gap-1 text-xs">
+        <BranchPickerPrimitive.Previous className="inline-flex size-6 items-center justify-center rounded-md hover:bg-muted hover:text-foreground">‹</BranchPickerPrimitive.Previous>
         <span>
           <BranchPickerPrimitive.Number /> / <BranchPickerPrimitive.Count />
         </span>
-        <BranchPickerPrimitive.Next className="actionIcon">›</BranchPickerPrimitive.Next>
+        <BranchPickerPrimitive.Next className="inline-flex size-6 items-center justify-center rounded-md hover:bg-muted hover:text-foreground">›</BranchPickerPrimitive.Next>
       </BranchPickerPrimitive.Root>
-      <ActionBarPrimitive.Root hideWhenRunning autohide="not-last" className="actionBar">
-        {role === "assistant" ? (
-          <>
-            <ActionBarPrimitive.Copy className="actionIcon" title="Copy">
-              <Copy size={14} />
-            </ActionBarPrimitive.Copy>
-            <ActionBarPrimitive.Reload className="actionIcon" title="Refresh">
-              <RefreshCw size={14} />
-            </ActionBarPrimitive.Reload>
-            <DropdownMenu>
-              <DropdownMenuTrigger className="actionIcon" title="More">
-                <MoreHorizontal size={14} />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent className="w-40">
-                <ActionBarPrimitive.ExportMarkdown asChild>
-                  <DropdownMenuItem>Export Markdown</DropdownMenuItem>
-                </ActionBarPrimitive.ExportMarkdown>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </>
-        ) : (
-          <ActionBarPrimitive.Edit className="actionIcon" title="Edit">
-            <PenLine size={14} />
-          </ActionBarPrimitive.Edit>
-        )}
+      <ActionBarPrimitive.Root hideWhenRunning className="inline-flex items-center gap-1">
+        <ActionBarPrimitive.Copy className="group/copy inline-flex size-6 items-center justify-center rounded-md hover:bg-muted hover:text-foreground data-[copied=true]:text-emerald-700" title="Copy" copiedDuration={1600} data-testid="assistant-copy-action">
+          <Copy className="copyDefault size-3.5 group-data-[copied=true]/copy:hidden" />
+          <Check className="copyDone hidden size-3.5 group-data-[copied=true]/copy:inline-flex" />
+        </ActionBarPrimitive.Copy>
+        <ActionBarPrimitive.Reload className="inline-flex size-6 items-center justify-center rounded-md hover:bg-muted hover:text-foreground" title="Refresh">
+          <RefreshCw className="size-3.5" />
+        </ActionBarPrimitive.Reload>
+        <DropdownMenu>
+          <DropdownMenuTrigger className="inline-flex size-6 items-center justify-center rounded-md hover:bg-muted hover:text-foreground" title="More">
+            <MoreHorizontal className="size-3.5" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent className="w-40">
+            <ActionBarPrimitive.ExportMarkdown asChild>
+              <DropdownMenuItem>Export Markdown</DropdownMenuItem>
+            </ActionBarPrimitive.ExportMarkdown>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </ActionBarPrimitive.Root>
     </div>
   );
@@ -732,38 +907,42 @@ function MessageActions({ role }: { role: "user" | "assistant" | "system" | "too
 function AssistantComposer() {
   const isRunning = useAuiState((state) => state.thread.isRunning);
   return (
-    <ComposerPrimitive.Root className="assistantComposer" data-testid="assistant-composer">
-      <div className="composerInputShell">
-        <ComposerPrimitive.Input placeholder="Send a message... (@ to mention, / for commands)" rows={2} />
-        <div className="composerToolbar">
-          <Button variant="ghost" size="icon" className="composerIcon" title="Add attachment" disabled>
-            <Plus size={21} />
+    <ComposerPrimitive.Root className="relative flex w-full flex-col" data-testid="assistant-composer">
+      <div className="flex w-full flex-col gap-2 rounded-(--composer-radius) border border-border/70 bg-(--composer-bg) p-(--composer-padding) shadow-[0_4px_16px_-8px_rgb(0_0_0/0.1),0_1px_2px_rgb(0_0_0/0.04)] transition-[border-color,box-shadow] focus-within:border-border focus-within:shadow-[0_6px_24px_-8px_rgb(0_0_0/0.14),0_1px_2px_rgb(0_0_0/0.05)]">
+        <ComposerPrimitive.Input
+          placeholder="Ask anything"
+          rows={2}
+          className="max-h-36 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base leading-relaxed outline-none placeholder:text-muted-foreground"
+        />
+        <div className="flex min-h-8 items-center gap-1.5">
+          <Button variant="ghost" size="icon" className="size-8 rounded-full text-foreground" title="Add attachment" disabled>
+            <Plus className="size-5" />
           </Button>
           <DropdownMenu>
-            <DropdownMenuTrigger className="modelSelector">
+            <DropdownMenuTrigger className="inline-flex h-8 min-w-0 items-center justify-center gap-2 rounded-full px-2.5 text-sm font-semibold text-foreground hover:bg-muted data-popup-open:bg-muted">
               Base Agent
-              <ChevronDown size={16} />
+              <ChevronDown className="size-4" />
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" sideOffset={8} className="modelMenuContent">
-              <DropdownMenuItem className="modelMenuItem selected">
+            <DropdownMenuContent align="start" sideOffset={8} className="min-w-48 p-1.5">
+              <DropdownMenuItem className="justify-between rounded-lg px-2.5 py-2 font-medium">
                 <span>Base Agent</span>
-                <Check size={15} />
+                <Check className="size-4" />
               </DropdownMenuItem>
-              <DropdownMenuItem className="modelMenuItem disabled" data-disabled>
+              <DropdownMenuItem className="justify-between rounded-lg px-2.5 py-2 text-muted-foreground" data-disabled>
                 <span>Pi Runtime</span>
-                <span className="modelMenuMeta">planned</span>
+                <span className="text-xs">planned</span>
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-          <span className="composerSpacer" />
+          <span className="flex-1" />
           <VoiceRecorderButton />
           {isRunning ? (
-            <ComposerPrimitive.Cancel className="sendButton" title="Stop generating">
-              <Square size={18} />
+            <ComposerPrimitive.Cancel className="inline-flex size-8 cursor-pointer items-center justify-center rounded-full bg-primary text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50" title="Stop generating">
+              <Square className="size-4 fill-current" />
             </ComposerPrimitive.Cancel>
           ) : (
-            <ComposerPrimitive.Send className="sendButton" title="Send message">
-              <ArrowUp size={19} />
+            <ComposerPrimitive.Send className="inline-flex size-8 cursor-pointer items-center justify-center rounded-full bg-primary text-primary-foreground hover:bg-primary/80 disabled:cursor-not-allowed disabled:opacity-50" title="Send message">
+              <ArrowUp className="size-4.5" />
             </ComposerPrimitive.Send>
           )}
         </div>
@@ -775,13 +954,15 @@ function AssistantComposer() {
 function VoiceRecorderButton() {
   const aui = useAui();
   const isRunning = useAuiState((state) => state.thread.isRunning);
-  const threadId = useAuiState((state) => state.threads.mainThreadId);
+  const threadId = useAuiState((state) => state.threadListItem.remoteId ?? state.threads.mainThreadId);
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus | null>(null);
   const [open, setOpen] = useState(false);
   const [state, setState] = useState<"idle" | "recording" | "sending" | "playing" | "degraded">("idle");
   const [message, setMessage] = useState<string | null>(null);
   const [transcript, setTranscript] = useState<string | null>(null);
   const [assistantText, setAssistantText] = useState<string | null>(null);
+  const [readinessItems, setReadinessItems] = useState<ProviderReadinessItem[]>([]);
+  const [auditEvents, setAuditEvents] = useState<VoiceAuditEvent[]>([]);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<BlobPart[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
@@ -812,6 +993,10 @@ function VoiceRecorderButton() {
     };
   }, []);
 
+  useEffect(() => {
+    if (open) void refreshVoiceDiagnostics();
+  }, [open, threadId]);
+
   const disabled = isRunning || state === "sending" || state === "playing" || !voiceStatus?.ready;
   const tooltip = state === "recording"
     ? "Stop recording"
@@ -819,6 +1004,28 @@ function VoiceRecorderButton() {
       ? "Open voice call"
       : message ?? "Voice unavailable";
   const callStatus = voiceCallStatusLabel(state, voiceStatus, message);
+  const speechReadiness = readinessItems.filter((item) => item.id === "speech-stt" || item.id === "speech-tts");
+  const latestAuditEvent = auditEvents[0];
+
+  async function refreshVoiceDiagnostics() {
+    try {
+      const [status, readiness, audit] = await Promise.all([
+        fetchJson<VoiceStatus>(`${apiBase}/voice/status`),
+        fetchJson<{ items: ProviderReadinessItem[] }>(`${apiBase}/settings/readiness`),
+        fetchJson<{ events: VoiceAuditEvent[] }>(`${apiBase}/voice/audit${threadId ? `?sessionId=${encodeURIComponent(threadId)}` : ""}`)
+      ]);
+      setVoiceStatus(status);
+      setReadinessItems(readiness.items);
+      setAuditEvents(audit.events);
+      if (!status.ready) {
+        setState("degraded");
+        setMessage(status.degradedReason ?? "Voice providers unavailable");
+      }
+    } catch (error) {
+      setState("degraded");
+      setMessage(error instanceof Error ? error.message : "Voice diagnostics unavailable");
+    }
+  }
 
   async function startRecording() {
     if (disabled && state !== "recording") return;
@@ -882,9 +1089,11 @@ function VoiceRecorderButton() {
       if (response.audioBase64 && response.mimeType) await playAudio(response.audioBase64, response.mimeType);
       setMessage(response.degradedReason ?? null);
       setState(response.degradedReason ? "degraded" : "idle");
+      void refreshVoiceDiagnostics();
     } catch (error) {
       setState("degraded");
       setMessage(error instanceof Error ? error.message : "Voice chat failed");
+      void refreshVoiceDiagnostics();
     }
   }
 
@@ -922,7 +1131,7 @@ function VoiceRecorderButton() {
             <Button
               variant="ghost"
               size="icon"
-              className={cn("composerIcon voiceButton", state)}
+              className={cn("size-8 rounded-full text-foreground voiceButton", state)}
               title={tooltip}
               disabled={isRunning}
               data-testid="voice-slot"
@@ -943,9 +1152,14 @@ function VoiceRecorderButton() {
                 <span>Voice Call</span>
                 <strong>{callStatus}</strong>
               </div>
-              <Button variant="ghost" size="icon" className="voiceCallClose" onClick={closeCall} aria-label="Close voice call">
-                <X size={18} />
-              </Button>
+              <div className="voiceHeaderActions">
+                <Button variant="ghost" size="icon" className="voiceCallClose" onClick={() => void refreshVoiceDiagnostics()} aria-label="Refresh voice diagnostics">
+                  <RefreshCw size={17} />
+                </Button>
+                <Button variant="ghost" size="icon" className="voiceCallClose" onClick={closeCall} aria-label="Close voice call">
+                  <X size={18} />
+                </Button>
+              </div>
             </header>
             <div className="voiceCallBody">
               <div className={cn("voiceAvatar", state === "recording" && "listening", state === "playing" && "speaking")}>
@@ -956,6 +1170,27 @@ function VoiceRecorderButton() {
                 <span>{voiceStatus?.stt.name ?? "stt"}</span>
                 <span>{voiceStatus?.tts.name ?? "tts"}</span>
               </div>
+              <div className="voiceReadinessGrid" data-testid="voice-readiness">
+                {speechReadiness.length > 0 ? (
+                  speechReadiness.map((item) => (
+                    <article key={item.id} data-status={item.status}>
+                      <div>
+                        <strong>{item.label}</strong>
+                        <span>{item.status}</span>
+                      </div>
+                      <p>{item.docsHint ?? item.action}</p>
+                    </article>
+                  ))
+                ) : (
+                  <article data-status="manual">
+                    <div>
+                      <strong>Speech readiness</strong>
+                      <span>loading</span>
+                    </div>
+                    <p>Voice provider readiness will appear here.</p>
+                  </article>
+                )}
+              </div>
               <div className="voiceCallCards">
                 <article>
                   <span>Transcript</span>
@@ -965,6 +1200,14 @@ function VoiceRecorderButton() {
                   <span>Assistant</span>
                   <p>{assistantText ?? message ?? "Ready for a voice turn."}</p>
                 </article>
+              </div>
+              <div className="voiceAuditSummary" data-testid="voice-audit-summary">
+                <span>Latest voice event</span>
+                <p>
+                  {latestAuditEvent
+                    ? `${latestAuditEvent.action.replace("voice.", "")} · ${latestAuditEvent.status} · ${latestAuditEvent.provider ?? "provider"}`
+                    : "No voice events for this thread yet."}
+                </p>
               </div>
             </div>
             <footer className="voiceCallControls">

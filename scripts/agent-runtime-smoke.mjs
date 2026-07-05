@@ -4,8 +4,7 @@ const { getAgentRuntimeStatus, listRuntimeAdapters, runPersonalAgentTurnWithAgen
 async function main() {
   const status = await getAgentRuntimeStatus({
     AGENT_RUNTIME_PROVIDER: "pi",
-    SILICONFLOW_API_KEY: "",
-    PI_API_KEY: ""
+    SILICONFLOW_API_KEY: ""
   });
   assert(status.provider === "pi", `expected pi provider, got ${status.provider}`);
   assert(status.configured === false, "expected missing Pi config to be unconfigured");
@@ -19,8 +18,7 @@ async function main() {
     },
     {
       AGENT_RUNTIME_PROVIDER: "pi",
-      SILICONFLOW_API_KEY: "",
-      PI_API_KEY: ""
+      SILICONFLOW_API_KEY: ""
     }
   );
   assert(turn.provider === "pi", `expected pi turn provider, got ${turn.provider}`);
@@ -49,7 +47,8 @@ async function main() {
     }
   );
   assert(localTurn.provider === "local-deterministic", `expected local deterministic turn, got ${localTurn.provider}`);
-  assert(localTurn.content.includes("可见扩展 2 个"), "expected local deterministic turn to report extension count");
+  assert(!localTurn.content.includes("可见扩展"), "local deterministic turn should not expose extension counts");
+  assert(!localTurn.content.includes("检索到相关记忆"), "local deterministic turn should not expose memory retrieval counts");
 
   console.log(
     JSON.stringify(

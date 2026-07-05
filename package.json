@@ -17,6 +17,8 @@
     "smoke:api:memory": "node scripts/api-memory-smoke.mjs",
     "smoke:api:workflows": "node scripts/api-workflows-smoke.mjs",
     "smoke:api:speech": "node scripts/api-speech-smoke.mjs",
+    "smoke:speech:providers": "node scripts/speech-provider-smoke.mjs",
+    "smoke:speech:live": "node scripts/speech-live-smoke.mjs",
     "smoke:api:pi-live": "node scripts/api-pi-live-smoke.mjs",
     "smoke:desktop:api-child": "node scripts/desktop-api-child-smoke.mjs",
     "smoke:desktop:preflight": "node scripts/desktop-preflight-smoke.mjs",

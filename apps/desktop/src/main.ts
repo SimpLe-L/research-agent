@@ -119,6 +119,7 @@ app.whenReady().then(() => {
 app.on("before-quit", shutdownApiProcess);
 
 app.on("window-all-closed", () => {
+  shutdownApiProcess();
   if (process.platform !== "darwin") app.quit();
 });
 

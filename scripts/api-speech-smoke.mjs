@@ -29,6 +29,10 @@ try {
     listTtsProviderAdapters().some((adapter) => adapter.id === "gpt-sovits-api"),
     "gpt-sovits-api adapter should be registered"
   );
+  assert(
+    listTtsProviderAdapters().some((adapter) => adapter.id === "minimax-t2a-v2"),
+    "minimax-t2a-v2 adapter should be registered"
+  );
   const realProviderMissingStatus = await getSpeechStatus({
     SPEECH_STT_PROVIDER: "openai-compatible-stt",
     SPEECH_TTS_PROVIDER: "gpt-sovits-api"
@@ -64,6 +68,19 @@ try {
     realProviderMissingAudio.degradedReason?.includes("GPT_SOVITS_TTS_URL"),
     "gpt-sovits-api should report missing env keys during synthesis"
   );
+  const minimaxMissingAudio = await synthesizeVoice(
+    {
+      text: "hello"
+    },
+    {
+      SPEECH_TTS_PROVIDER: "minimax-t2a-v2"
+    }
+  );
+  assert(
+    minimaxMissingAudio.degradedReason?.includes("MINIMAX_API_KEY") &&
+      minimaxMissingAudio.degradedReason?.includes("MINIMAX_GROUP_ID"),
+    "minimax-t2a-v2 should report missing env keys during synthesis"
+  );
   const missingTranscript = await transcribeVoice(
     {
       audioBase64: Buffer.from("fake audio").toString("base64"),
@@ -94,7 +111,6 @@ try {
         PORT: String(port),
         SP_AGENT_DATA_DIR: dataDir,
         SILICONFLOW_API_KEY: "",
-        PI_API_KEY: "",
         SPEECH_STT_PROVIDER: "deterministic",
         SPEECH_TTS_PROVIDER: "deterministic",
         SPEECH_DETERMINISTIC_TRANSCRIPT: "语音 smoke：当前 agent 有哪些能力？"

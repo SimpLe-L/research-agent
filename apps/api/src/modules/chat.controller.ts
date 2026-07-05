@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Inject, NotFoundException, Param, Patch, Post } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Inject, NotFoundException, Param, Patch, Post } from "@nestjs/common";
 import { createChatMessageSchema, createChatSessionSchema, updateChatSessionSchema } from "@sp-agent/shared";
 import { ChatService } from "./chat.service.js";
 
@@ -36,5 +36,10 @@ export class ChatController {
   async createMessage(@Param("id") id: string, @Body() body: unknown) {
     const input = createChatMessageSchema.parse(body);
     return this.chatService.createMessage(id, input);
+  }
+
+  @Delete(":id")
+  async deleteSession(@Param("id") id: string) {
+    return this.chatService.deleteSession(id);
   }
 }
