@@ -1,6 +1,5 @@
 import { Inject, Injectable } from "@nestjs/common";
-import { getAgentRuntimeStatus, runPersonalAgentTurnWithAgent } from "@sp-agent/agent-runtime";
-import { getExtensionRuntimeStatus } from "@sp-agent/extensions";
+import { getAgentRuntimeStatus, listRuntimeAdapters, runPersonalAgentTurnWithAgent } from "@sp-agent/agent-runtime";
 import type { AgentMessageResponse, AgentShellStatus, CreateAgentMessageInput } from "@sp-agent/shared";
 import { ChatService } from "./chat.service.js";
 import { ExtensionsService, isReadOnlyExtensionCapability } from "./extensions.service.js";
@@ -15,25 +14,30 @@ export class AgentShellService {
   ) {}
 
   async getStatus(): Promise<AgentShellStatus> {
-    const extensionStatus = getExtensionRuntimeStatus();
+    const extensionStatus = await this.extensionsService.list();
     return {
       mode: "local_personal_agent",
       piRuntime: {
         name: "agent-runtime",
         ...(await getAgentRuntimeStatus())
       },
+      runtimeAdapters: listRuntimeAdapters().map((adapter) => ({
+        id: adapter.id,
+        label: adapter.label,
+        default: adapter.default
+      })),
       safetyModel: extensionStatus.safetyModel,
       extensions: extensionStatus.extensions
     };
   }
 
-  async runMessage(input: CreateAgentMessageInput): Promise<AgentMessageResponse> {
-    const extensionStatus = getExtensionRuntimeStatus();
+  async runMessage(input: CreateAgentMessageInput, metadata: Record<string, unknown> = { source: "agent.messages" }): Promise<AgentMessageResponse> {
+    const extensionStatus = await this.extensionsService.list();
     const session = await this.chatService.getOrCreateSession(input.sessionId, { title: makeSessionTitle(input.content) });
     await this.chatService.createMessage(session.id, {
       role: "user",
       content: input.content,
-      metadata: { source: "agent.messages" }
+      metadata
     });
     const memoryContext = await this.memoryService
       .search({
@@ -89,7 +93,7 @@ export class AgentShellService {
       role: "assistant",
       content: result.content,
       metadata: {
-        source: "agent.messages",
+        ...metadata,
         provider: result.provider,
         model: result.model,
         degradedReason: result.degradedReason,

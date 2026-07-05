@@ -5,6 +5,7 @@ packages:
   - "packages/shared"
   - "packages/extensions"
   - "packages/agent-runtime"
+  - "packages/speech"
 allowBuilds:
   '@nestjs/core': set this to true or false
   electron: set this to true or false

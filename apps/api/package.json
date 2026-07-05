@@ -16,6 +16,7 @@
     "@nestjs/platform-express": "^10.4.15",
     "@sp-agent/agent-runtime": "workspace:*",
     "@sp-agent/extensions": "workspace:*",
+    "@sp-agent/speech": "workspace:*",
     "@sp-agent/shared": "workspace:*",
     "dotenv": "^17.4.2",
     "reflect-metadata": "^0.2.2",

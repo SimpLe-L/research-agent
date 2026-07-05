@@ -1,5 +1,5 @@
 await import("../apps/api/dist/apps/api/src/env.js").catch(() => undefined);
-const { getAgentRuntimeStatus, runPersonalAgentTurnWithAgent } = await import("../packages/agent-runtime/dist/index.js");
+const { getAgentRuntimeStatus, listRuntimeAdapters, runPersonalAgentTurnWithAgent } = await import("../packages/agent-runtime/dist/index.js");
 
 async function main() {
   const status = await getAgentRuntimeStatus({
@@ -27,13 +27,39 @@ async function main() {
   assert(Boolean(turn.degradedReason), "expected missing config turn to degrade");
   assert(turn.activeTools?.includes("inspect_extension_registry"), "expected registry inspection tool to be exposed");
 
+  const adapters = listRuntimeAdapters();
+  assert(adapters.some((adapter) => adapter.id === "pi" && adapter.default), "expected default Pi runtime adapter");
+  assert(adapters.some((adapter) => adapter.id === "local-deterministic" && !adapter.default), "expected local deterministic runtime adapter");
+
+  const localStatus = await getAgentRuntimeStatus({
+    AGENT_RUNTIME_PROVIDER: "local-deterministic"
+  });
+  assert(localStatus.provider === "local-deterministic", `expected local deterministic provider, got ${localStatus.provider}`);
+  assert(localStatus.configured === true && localStatus.reachable === true, "expected local deterministic runtime to be ready");
+
+  const localTurn = await runPersonalAgentTurnWithAgent(
+    {
+      message: "离线模式可用吗？",
+      memoryContext: [{ entry: { id: "memory_smoke" } }],
+      extensionManifests: [{ id: "local.context" }, { id: "local.bookmarks" }],
+      safetyModel: { defaultToolPolicy: "read_only" }
+    },
+    {
+      AGENT_RUNTIME_PROVIDER: "local-deterministic"
+    }
+  );
+  assert(localTurn.provider === "local-deterministic", `expected local deterministic turn, got ${localTurn.provider}`);
+  assert(localTurn.content.includes("可见扩展 2 个"), "expected local deterministic turn to report extension count");
+
   console.log(
     JSON.stringify(
       {
         ok: true,
         status,
+        adapters: adapters.map((adapter) => adapter.id),
         degradedReason: turn.degradedReason,
-        activeTools: turn.activeTools
+        activeTools: turn.activeTools,
+        localDeterministic: localTurn.content
       },
       null,
       2

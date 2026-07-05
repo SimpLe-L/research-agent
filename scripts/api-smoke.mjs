@@ -38,11 +38,14 @@ async function main() {
   assert(Array.isArray(readiness.items), "expected readiness items");
   assert(readiness.items.some((item) => item.id === "pi-runtime"), "expected pi-runtime readiness item");
   assert(readiness.items.some((item) => item.id === "memory-layer" && item.status === "ready"), "expected ready memory layer");
+  assert(readiness.items.some((item) => item.id === "speech-stt"), "expected speech-stt readiness item");
+  assert(readiness.items.some((item) => item.id === "speech-tts"), "expected speech-tts readiness item");
 
   const extensions = await readJson(`${base}/extensions`);
   assert(Array.isArray(extensions.extensions), "expected extension registry");
   assert(extensions.extensions.some((extension) => extension.id === "core.agent-shell"), "expected core.agent-shell extension");
   assert(extensions.extensions.some((extension) => extension.id === "local.memory" && extension.status === "active"), "expected active local.memory extension");
+  assert(extensions.extensions.some((extension) => extension.id === "local.project" && extension.status === "active"), "expected active local.project extension");
   assert(!extensions.extensions.some((extension) => extension.id === "web3.research"), "web3.research should not be active");
 
   const agentStatus = await readJson(`${base}/agent/status`);

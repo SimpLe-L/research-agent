@@ -24,6 +24,7 @@ Active workspace packages:
 - `packages/shared`
 - `packages/extensions`
 - `packages/agent-runtime`
+- `packages/speech`
 
 Detached reference code should not be restored into the active workspace unless it supports a new explicit personal-agent skill.
 
@@ -77,7 +78,9 @@ Complete when:
 - Renderer first screen is assistant-ui runtime-backed chat on `/` and `/chat`.
 - Default frontend chat calls `/api/agent/messages`; it no longer creates research tasks.
 - API gateway exposes health, provider status, settings readiness, chat sessions, agent status/messages, and extension registry/invoke.
-- Extension registry exposes `core.agent-shell`, active `local.memory`, active `local.context`, and planned `local.speech`.
+- API gateway exposes a local approval queue for write/provider/destructive-capability requests.
+- API gateway exposes a local workflow runner for observable skill execution, including synchronous project-doc search, async queued start, retry, cancellation, and stale-run recovery.
+- Extension registry exposes `core.agent-shell`, active `local.memory`, active `local.context`, active `local.project`, active `local.bookmarks`, and readiness-gated `local.speech`.
 - `web3.research`, `web3.market`, report, knowledge, watchlist, queue, and worker routes are no longer active.
 - Web3/research source packages, API modules, web components, and smoke scripts were deleted from the active checkout.
 - Chat sessions persist to local JSON.
@@ -89,9 +92,15 @@ Complete when:
 - The assistant-ui shell now includes real desktop sidebar collapse, mobile sheet navigation, dynamic thread title, model dropdown shell, scroll-to-bottom control, basic message actions, and two-level welcome suggestions that can send prompts through the assistant-ui runtime.
 - `PATCH /api/chat/sessions/:id` updates session titles for assistant-ui thread rename/title generation.
 - `POST /api/agent/messages` persists both user and assistant messages to the chat session.
-- `local.memory` is active with local JSON-backed write candidates, search, source/provenance metadata, and tombstone deletion.
+- `local.memory` is active with local JSON-backed write candidates, search, source/provenance metadata, promotion, update, merge, conflict detection/resolution audit events, stronger ranking signals, and tombstone deletion.
+- Write/provider extension invocations return `pending_approval` and require an approved `approvalId` before execution.
 - `packages/shared` now contains only generic agent/chat/settings/extension contracts.
-- `packages/agent-runtime` now contains only generic Pi personal-agent turn behavior and runtime readiness.
+- `packages/agent-runtime` now exposes a `RuntimeAdapter` registry; Pi is the default registered adapter and `local-deterministic` is available as a non-default offline fallback/registry verification adapter.
+- Extension invocation in the API is handler-registry driven instead of hard-coded controller branches.
+- `local.project` is the first practical read-only personal skill; it searches allowlisted project docs through the workflow runner.
+- `local.bookmarks` is the first connector-backed read-only personal skill; it searches user-supplied local bookmark records from `connectors/bookmarks.json` under the app data directory and returns explicit degraded reasons when data is absent or unmatched.
+- Workflows persist to local JSON with status, timestamps, node events, retry, cancellation, result, error, and degraded reason fields.
+- Workflows can be started asynchronously through the API and stale pending/running records are marked failed with a truthful recovery degraded reason.
 - `pnpm smoke:api` validates the active gateway and asserts `web3.research` is not registered.
 - `.env` contains a SiliconFlow key and live Pi runtime verification passes.
 - `pnpm smoke:api:pi-live` verifies the Nest API can call Pi/SiliconFlow and persist the live conversation.
@@ -103,13 +112,23 @@ Complete when:
 - `pnpm smoke:desktop:preflight` protects Electron startup invariants without needing GUI approval.
 - `pnpm smoke:desktop:api-child` verifies the same Node child-process strategy Electron uses can load the Pi SDK and read the extension registry.
 - The renderer header shows the active extension count so the shell exposes extension capacity without adding a complex workbench UI.
+- The renderer header includes an approval review entry with pending count, a right-side review panel, and approve/deny actions backed by `/api/approvals`.
+- `packages/speech` defines STT/TTS provider adapter contracts with deterministic smoke adapters, explicit degraded states, `openai-compatible-stt`, and `gpt-sovits-api`.
+- API voice endpoints exist for Phase 1 half-duplex chat: `GET /api/voice/status`, `POST /api/voice/transcribe`, `POST /api/voice/synthesize`, and `POST /api/voice/chat`.
+- Voice chat reuses the existing agent message path after STT, so transcripts get normal session persistence, memory retrieval, runtime behavior, and skill boundaries.
+- Voice transcript messages are persisted with provenance metadata (`source: voice`, `sttProvider`, `audioPersisted: false`), and raw audio is not persisted.
+- `GET /api/settings/readiness` exposes dynamic `speech-stt` and `speech-tts` provider readiness.
+- `GET /api/voice/audit` exposes local voice audit events for transcribe/synthesize requested, completed, and degraded states.
+- Renderer composer mic opens a dedicated voice call overlay wired to the API-owned voice chat path with recording, sending, playing, transcript, assistant response, and degraded UI states. Missing speech providers keep typed chat usable and show a degraded voice state.
+- `pnpm smoke:api:speech` verifies deterministic STT/TTS, dynamic `local.speech` readiness, settings readiness, voice audit events, voice chat session persistence, and audio non-persistence metadata.
 
 ## Current Gaps
 
-1. Memory update/merge/promotion policy is not implemented beyond write candidates and tombstones.
-2. Runtime adapter contract is Pi-first; additional adapters are not implemented yet.
-3. Skill/workflow layer only has the minimal read-only `local.context` skill; no graph-backed workflow exists yet.
-4. Speech is intentionally last; current UI keeps only a disabled mic slot.
+1. Graph-backed workflows are not implemented yet. Add LangGraph only when a skill truly needs graph orchestration, and keep it behind the extension boundary.
+2. Workflow runner remains local-JSON backed and in-process for execution; it now has async start and stale recovery, but durable cross-process workers are still future hardening.
+3. Connector boundary is implemented with `local.bookmarks`; additional real personal-service connectors still need per-connector permission and audit design.
+4. `local-deterministic` proves a second adapter path, but additional live provider adapters should wait for a real provider/use case.
+5. Speech Phase 1 half-duplex shell is implemented with deterministic providers, renderer recording/playback UI, `openai-compatible-stt`, `gpt-sovits-api`, settings readiness, and voice audit events; live local provider validation and settings UI remain.
 
 ## OpenClaw-Style Optimization Direction
 
@@ -125,13 +144,10 @@ The current repository should be treated as a working v0 shell, not a complete O
 
 ### Highest Priority Gaps
 
-1. Runtime adapter registry: extract a real `RuntimeAdapter` contract so Pi is the default implementation rather than the only shape in the type system.
-2. Extension handler registry: replace hard-coded `if id/capability` invocation with registered handlers tied to manifests, permission metadata, schemas, and degraded behavior.
-3. Approval queue: add a first-class approval request path for write/provider/destructive/external actions. The model can request these actions, but the API and user approval must execute them.
-4. Memory v2: add promote, update, merge, forget audit, source conflict handling, and stronger ranking. Keep write candidates separate from durable accepted facts.
-5. Workflow runner: add long-running skill execution with status, timestamps, cancellation, retry, degraded reason, and observable node events.
-6. First real personal skill: add one useful non-voice personal skill behind the extension boundary before adding broad system control. Good candidates are local project knowledge, calendar/read-only schedule, file index search, or clipboard/text summarization.
-7. Connector boundary: add personal-service connectors only after approval and audit exist. Email, calendar, files, browser, and messaging should start read-only before any write/post/send actions.
+1. Graph/workflow hardening: add LangGraph or a durable worker only when a real long-running skill needs it.
+2. Connector expansion: add additional read-only personal-service connectors behind extension permissions and audit.
+3. Additional live runtime adapter: register a second provider-backed adapter only after a real provider/use case exists.
+4. GUI click verification: browser bundle smoke covers the approval UI anchors, but a Playwright/Chrome click smoke should be added once the local browser executable can launch reliably in automation.
 
 ### Non-Goals For The Next Phase
 
@@ -148,7 +164,7 @@ The product can be considered on a credible OpenClaw-style path when:
 - The agent can discover skills, call read-only skills, and request approval for higher-risk actions.
 - A long-running task can survive API restart or expose a truthful degraded reason if persistence is not ready.
 - Memory search, promotion, update, merge, and deletion are visible and reversible enough for daily personal use.
-- At least one connector-backed skill works end to end through the extension boundary with permission audit.
+- At least one connector-backed skill works end to end through the extension boundary with permission audit. Done with `local.bookmarks`.
 - The desktop shell remains the primary surface, while future mobile or messaging companion surfaces call the same local gateway instead of duplicating agent logic.
 
 ## Roadmap
@@ -172,6 +188,7 @@ Latest verification:
 - `pnpm typecheck`
 - `pnpm build`
 - `pnpm smoke:web:routes`
+- Approval UI anchors are included in `pnpm smoke:web:routes`.
 - Browser visual check at desktop `1280x720` and mobile `390x844`: no missing core anchors and no horizontal overflow.
 - `pnpm --filter @sp-agent/web build`
 - `pnpm smoke:web:routes`
@@ -183,7 +200,7 @@ Status: verified.
 Delivered:
 
 - Active API no longer imports research/database/market/knowledge/watchlist services.
-- Active extension registry contains `core.agent-shell`, active `local.memory`, active `local.context`, and planned `local.speech`.
+- Active extension registry contains `core.agent-shell`, active `local.memory`, active `local.context`, active `local.project`, active `local.bookmarks`, and readiness-gated `local.speech`.
 - `pnpm smoke:api` starts the built API and verifies health, provider status, readiness, extensions, agent status, and degraded agent message behavior.
 - `pnpm smoke:api:pi-live` starts the built API with `.env` credentials and verifies a live Pi/SiliconFlow agent response.
 - Browser-level built web verification against the live API confirms the chat UI renders a Pi response.
@@ -204,7 +221,7 @@ Latest verification:
 
 ### Phase 3: Memory Layer
 
-Status: partially implemented.
+Status: verified hardened implementation; future work is deeper ranking/evaluation only if daily usage shows gaps.
 
 Deliverables:
 
@@ -213,45 +230,58 @@ Deliverables:
 - Add memory search and memory write-candidate APIs. Done.
 - Register implemented memory capabilities in `packages/extensions`. Done.
 - Expose memory search to the agent as a read-only tool first. Done through both extension invocation and deterministic retrieval context before the agent turn.
+- Add promote, update, merge, and audit events. Done.
+- Route write/provider memory extension calls through approval queue. Done.
+- Add source-conflict detection and merge-based conflict resolution audit. Done.
+- Add stronger ranking with exact phrase, term frequency, tag/source/status/confidence/recency signals. Done.
 
 Acceptance:
 
 - `pnpm smoke:api:memory`
 - Agent turn can retrieve memory without directly mutating it. Done for deterministic pre-prompt retrieval; mutation remains outside auto tool access.
+- Extension memory writes require approval and can complete after approval. Done.
+- Conflict detection, conflict resolution audit, matched terms, and ranking signals are covered by `pnpm smoke:api:memory`.
 
 ### Phase 4: Skill And Workflow Layer
 
-Status: started with a minimal read-only skill.
+Status: verified non-speech implementation; graph and durable-worker hardening remain future work.
 
 Deliverables:
 
 - Add one small non-voice personal-agent skill behind `packages/extensions`. Done with `local.context`.
 - Keep skill invocation typed, permissioned, and observable. Done for `context.snapshot`.
 - Add API smoke coverage for the skill. Done with `pnpm smoke:api:extensions`.
-- Add `packages/workflows` only if the skill genuinely needs graph orchestration.
+- Add a workflow runner only where a skill genuinely needs observable multi-step execution. Done in the API gateway for `local.project`.
+- Add one practical non-voice personal skill. Done with `local.project`, a read-only project-doc search skill restricted to allowlisted repo docs.
+- Workflow records include status, timestamps, cancellation, retry, degraded reason, and node events. Done for the local JSON runner.
+- Add async workflow start and stale pending/running recovery. Done for the local project-doc workflow path.
+- Add a first connector-backed read-only personal skill. Done with `local.bookmarks`.
 - If LangGraph is introduced, wrap it inside the skill capability and keep node events observable.
 
 Acceptance:
 
 - API smoke for the implemented skill.
+- `pnpm smoke:api:workflows`
+- Async workflow start and connector-backed skill execution are covered by `pnpm smoke:api:workflows` and `pnpm smoke:api:extensions`.
 - Existing chat, memory, and runtime smokes still pass.
 
 ### Phase 5: Speech Layer
 
-Last target.
+Status: Phase 1 half-duplex shell implemented; Phase 2 provider readiness and voice audit foundations are implemented; first real provider adapters still require configured live services.
 
 Deliverables:
 
-- Add `packages/speech` for STT/TTS provider contracts.
-- Add API voice session flow for half-duplex chat.
-- Add renderer record/transcribe/send/playback flow.
-- Add provider readiness for STT/TTS.
-- Keep raw audio persistence disabled by default.
+- Add `packages/speech` for STT/TTS provider contracts. Done.
+- Add API voice session flow for half-duplex chat. Done for missing, deterministic, and optional provider paths.
+- Add renderer record/transcribe/send/playback flow. Done through the dedicated voice call overlay on the API-owned voice path.
+- Add provider readiness for STT/TTS. Done for missing, deterministic, `openai-compatible-stt`, and `gpt-sovits-api`.
+- Add speech audit events. Done for transcribe/synthesize requested, completed, and degraded states.
+- Keep raw audio persistence disabled by default. Done in API metadata/policy.
 
 Acceptance:
 
 - `pnpm smoke:api:speech`
-- Text chat still works.
+- Text chat still works through the same `/api/agent/messages` path.
 - Renderer can complete record -> transcript -> agent -> playback with one provider or explicit degraded reason.
 
 ## Verification Commands
@@ -264,6 +294,8 @@ pnpm build
 pnpm smoke:api
 pnpm smoke:api:extensions
 pnpm smoke:api:memory
+pnpm smoke:api:workflows
+pnpm smoke:api:speech
 pnpm smoke:desktop:preflight
 pnpm smoke:desktop:api-child
 pnpm smoke:web:routes
@@ -284,7 +316,7 @@ Future memory checks:
 pnpm smoke:api:memory
 ```
 
-Future speech checks:
+Current speech checks:
 
 ```bash
 pnpm smoke:api:speech

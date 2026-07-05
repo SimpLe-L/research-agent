@@ -17,7 +17,8 @@
       "@sp-agent/database": ["packages/database/src/index.ts"],
       "@sp-agent/agent-runtime": ["packages/agent-runtime/src/index.ts"],
       "@sp-agent/data-connectors": ["packages/data-connectors/src/index.ts"],
-      "@sp-agent/extensions": ["packages/extensions/src/index.ts"]
+      "@sp-agent/extensions": ["packages/extensions/src/index.ts"],
+      "@sp-agent/speech": ["packages/speech/src/index.ts"]
     }
   }
 }

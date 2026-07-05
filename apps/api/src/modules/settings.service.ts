@@ -1,5 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import { getAgentRuntimeStatus } from "@sp-agent/agent-runtime";
+import { getSpeechStatus } from "@sp-agent/speech";
 import type { AppSettings, ProviderReadinessItem } from "@sp-agent/shared";
 
 @Injectable()
@@ -16,6 +17,7 @@ export class SettingsService {
 
   async readiness(): Promise<{ items: ProviderReadinessItem[] }> {
     const piRuntime = await getAgentRuntimeStatus(process.env);
+    const speech = await getSpeechStatus(process.env);
     return {
       items: [
         {
@@ -60,13 +62,49 @@ export class SettingsService {
           docsHint: "Memory is persisted as local JSON in SP_AGENT_DATA_DIR or .sp-agent-data by default."
         },
         {
-          id: "speech-layer",
-          label: "Speech I/O",
-          status: "manual",
-          capability: "Half-duplex record -> STT -> agent -> TTS -> playback",
-          envVars: [],
-          action: "Implement STT/TTS provider adapters after the memory boundary is stable.",
-          docsHint: "Raw audio persistence should stay disabled by default."
+          id: "speech-stt",
+          label: "Speech STT provider",
+          status: readinessStatus(speech.stt.configured, speech.stt.reachable),
+          capability: "Transcribe recorded audio before it enters the normal agent message path",
+          envVars: ["SPEECH_STT_PROVIDER", "OPENAI_COMPATIBLE_STT_URL", "OPENAI_COMPATIBLE_STT_API_KEY", "OPENAI_COMPATIBLE_STT_MODEL"],
+          envTemplate: [
+            "SPEECH_STT_PROVIDER=openai-compatible-stt",
+            "OPENAI_COMPATIBLE_STT_URL=",
+            "OPENAI_COMPATIBLE_STT_API_KEY=",
+            "OPENAI_COMPATIBLE_STT_MODEL="
+          ].join("\n"),
+          action: speech.stt.reachable
+            ? "Run pnpm smoke:api:speech after STT provider or voice API changes."
+            : "Configure SPEECH_STT_PROVIDER and the selected STT provider environment variables, then restart the API.",
+          docsHint: speech.stt.degradedReason ?? "Raw audio is not persisted by default."
+        },
+        {
+          id: "speech-tts",
+          label: "Speech TTS provider",
+          status: readinessStatus(speech.tts.configured, speech.tts.reachable),
+          capability: "Synthesize assistant text into audio after the normal agent response",
+          envVars: [
+            "SPEECH_TTS_PROVIDER",
+            "GPT_SOVITS_TTS_URL",
+            "GPT_SOVITS_REF_AUDIO_PATH",
+            "GPT_SOVITS_PROMPT_TEXT",
+            "GPT_SOVITS_TEXT_LANG",
+            "GPT_SOVITS_PROMPT_LANG",
+            "GPT_SOVITS_TEXT_SPLIT_METHOD"
+          ],
+          envTemplate: [
+            "SPEECH_TTS_PROVIDER=gpt-sovits-api",
+            "GPT_SOVITS_TTS_URL=http://127.0.0.1:9880/tts",
+            "GPT_SOVITS_REF_AUDIO_PATH=",
+            "GPT_SOVITS_PROMPT_TEXT=",
+            "GPT_SOVITS_TEXT_LANG=zh",
+            "GPT_SOVITS_PROMPT_LANG=zh",
+            "GPT_SOVITS_TEXT_SPLIT_METHOD=cut0"
+          ].join("\n"),
+          action: speech.tts.reachable
+            ? "Run pnpm smoke:api:speech after TTS provider or voice API changes."
+            : "Configure SPEECH_TTS_PROVIDER and the selected TTS provider environment variables, then restart the API.",
+          docsHint: speech.tts.degradedReason ?? "TTS is optional; typed chat must remain usable when TTS is missing."
         }
       ]
     };
@@ -79,4 +117,9 @@ export class SettingsService {
     };
     return this.settings;
   }
+}
+
+function readinessStatus(configured: boolean, reachable: boolean): ProviderReadinessItem["status"] {
+  if (reachable) return "ready";
+  return configured ? "degraded" : "missing";
 }

@@ -9,7 +9,7 @@ type PiModelRegistry = {
 };
 
 export type AgentRuntimeStatus = {
-  provider: "pi";
+  provider: string;
   configured: boolean;
   reachable: boolean;
   sdkLoaded?: boolean;
@@ -51,12 +51,71 @@ export type PersonalAgentTurnInput = {
 
 export type PersonalAgentTurnResult = {
   content: string;
-  provider: "pi";
+  provider: string;
   model?: string;
   degradedReason?: string;
   activeTools?: string[];
   toolCalls?: AgentRuntimeToolCallAudit[];
 };
+
+export type RuntimeAdapter = {
+  id: string;
+  label: string;
+  default: boolean;
+  getStatus(env?: NodeJS.ProcessEnv): Promise<AgentRuntimeStatus>;
+  runTurn(input: PersonalAgentTurnInput, env?: NodeJS.ProcessEnv): Promise<PersonalAgentTurnResult>;
+};
+
+const piRuntimeAdapter: RuntimeAdapter = {
+  id: "pi",
+  label: "Pi",
+  default: true,
+  getStatus: getPiAgentRuntimeStatus,
+  runTurn: runPiPersonalAgentTurn
+};
+
+const localDeterministicRuntimeAdapter: RuntimeAdapter = {
+  id: "local-deterministic",
+  label: "Local Deterministic",
+  default: false,
+  getStatus: async () => ({
+    provider: "local-deterministic",
+    configured: true,
+    reachable: true
+  }),
+  runTurn: async (input) => {
+    const memoryCount = input.memoryContext?.length ?? 0;
+    const extensionCount = input.extensionManifests?.length ?? 0;
+    return {
+      content:
+        `本地确定性 runtime 已接管本轮回复。收到用户消息：${truncateForReply(input.message)}\n` +
+        `当前可见扩展 ${extensionCount} 个，检索到相关记忆 ${memoryCount} 条。该 adapter 不调用外部模型，适合作为离线降级和注册表验证路径。`,
+      provider: "local-deterministic",
+      model: "deterministic-v0",
+      activeTools: []
+    };
+  }
+};
+
+const runtimeAdapters: RuntimeAdapter[] = [piRuntimeAdapter, localDeterministicRuntimeAdapter];
+
+export function listRuntimeAdapters(): RuntimeAdapter[] {
+  return runtimeAdapters;
+}
+
+export function getRuntimeAdapter(id: string): RuntimeAdapter | undefined {
+  return runtimeAdapters.find((adapter) => adapter.id === id);
+}
+
+export function getSelectedRuntimeAdapter(env: NodeJS.ProcessEnv = process.env): RuntimeAdapter {
+  const selected = env.AGENT_RUNTIME_PROVIDER || runtimeAdapters.find((adapter) => adapter.default)?.id || "pi";
+  return getRuntimeAdapter(selected) ?? piRuntimeAdapter;
+}
+
+function truncateForReply(value: string) {
+  const clean = value.replace(/\s+/g, " ").trim();
+  return clean.length > 80 ? `${clean.slice(0, 80)}...` : clean;
+}
 
 const inspectExtensionRegistryParams = Type.Object({
   maxChars: Type.Optional(Type.Number({ description: "Maximum JSON characters to return. Default 12000." }))
@@ -69,6 +128,17 @@ const invokeExtensionCapabilityParams = Type.Object({
 });
 
 export async function getAgentRuntimeStatus(env: NodeJS.ProcessEnv = process.env): Promise<AgentRuntimeStatus> {
+  return getSelectedRuntimeAdapter(env).getStatus(env);
+}
+
+export async function runPersonalAgentTurnWithAgent(
+  input: PersonalAgentTurnInput,
+  env: NodeJS.ProcessEnv = process.env
+): Promise<PersonalAgentTurnResult> {
+  return getSelectedRuntimeAdapter(env).runTurn(input, env);
+}
+
+async function getPiAgentRuntimeStatus(env: NodeJS.ProcessEnv = process.env): Promise<AgentRuntimeStatus> {
   const provider = piModelProvider(env);
   const modelId = piModelId(env);
   const hasConfig = piHasApiKey(provider, env);
@@ -129,7 +199,7 @@ export async function getAgentRuntimeStatus(env: NodeJS.ProcessEnv = process.env
   }
 }
 
-export async function runPersonalAgentTurnWithAgent(
+async function runPiPersonalAgentTurn(
   input: PersonalAgentTurnInput,
   env: NodeJS.ProcessEnv = process.env
 ): Promise<PersonalAgentTurnResult> {

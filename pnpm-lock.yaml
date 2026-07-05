@@ -38,6 +38,9 @@ importers:
       '@sp-agent/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      '@sp-agent/speech':
+        specifier: workspace:*
+        version: link:../../packages/speech
       dotenv:
         specifier: ^17.4.2
         version: 17.4.2
@@ -163,6 +166,16 @@ importers:
       zod:
         specifier: ^3.24.1
         version: 3.25.76
+    devDependencies:
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+
+  packages/speech:
+    dependencies:
+      '@sp-agent/shared':
+        specifier: workspace:*
+        version: link:../shared
     devDependencies:
       typescript:
         specifier: ^5.7.3

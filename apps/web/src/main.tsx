@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   ActionBarPrimitive,
@@ -40,7 +40,9 @@ import {
   Plus,
   RefreshCw,
   Share,
+  ShieldCheck,
   Square,
+  X,
   Upload,
   CloudSun
 } from "lucide-react";
@@ -85,6 +87,24 @@ type AgentMessageResponse = {
   toolCalls?: Array<Record<string, unknown>>;
 };
 
+type VoiceStatus = {
+  ready: boolean;
+  degradedReason?: string;
+  stt: ProviderStatus & { name: string };
+  tts: ProviderStatus & { name: string };
+};
+
+type VoiceChatResponse = {
+  sessionId: string;
+  transcript?: string;
+  assistantText: string;
+  audioBase64?: string;
+  mimeType?: string;
+  degradedReason?: string;
+};
+
+const pendingVoiceResponses = new Map<string, VoiceChatResponse>();
+
 type ThreadRecord = {
   id: string;
   title: string;
@@ -93,53 +113,20 @@ type ThreadRecord = {
   messages?: Array<{ id?: string; role: string; content: string; createdAt: string }>;
 };
 
-const suggestionGroups = [
-  {
-    label: "Weather",
-    icon: CloudSun,
-    options: [
-      { label: "in Shanghai", prompt: "What's the weather in Shanghai today?" },
-      { label: "in San Francisco", prompt: "What's the weather in San Francisco today?" },
-      { label: "weekend forecast", prompt: "Check the weekend forecast and summarize what matters." }
-    ]
-  },
-  {
-    label: "Code",
-    icon: Code2,
-    options: [
-      { label: "explain this error", prompt: "Help me explain and debug this error." },
-      { label: "review a component", prompt: "Review this React component and point out practical improvements." },
-      { label: "write TypeScript", prompt: "Write a concise TypeScript implementation for this task." }
-    ]
-  },
-  {
-    label: "Write",
-    icon: PenLine,
-    options: [
-      { label: "a PR description", prompt: "Write a clear pull request description for this change." },
-      { label: "release notes", prompt: "Draft release notes for a small product update." },
-      { label: "polish wording", prompt: "Polish this text while preserving the original meaning." }
-    ]
-  },
-  {
-    label: "Analyze",
-    icon: BarChart3,
-    options: [
-      { label: "tradeoffs", prompt: "Analyze the tradeoffs and give a recommended path." },
-      { label: "compare options", prompt: "Compare these options in a compact table." },
-      { label: "risk review", prompt: "Review the risks and missing information." }
-    ]
-  },
-  {
-    label: "Brainstorm",
-    icon: Lightbulb,
-    options: [
-      { label: "project ideas", prompt: "Brainstorm practical agent project ideas I could build." },
-      { label: "feature names", prompt: "Brainstorm concise names for this feature." },
-      { label: "next steps", prompt: "Brainstorm the next implementation steps." }
-    ]
-  }
-];
+type ApprovalRequest = {
+  id: string;
+  extensionId?: string;
+  capabilityId?: string;
+  action: string;
+  reason: string;
+  permissions: string[];
+  input: Record<string, unknown>;
+  status: "pending" | "approved" | "denied" | "expired";
+  createdAt: string;
+  updatedAt: string;
+  decidedAt?: string;
+};
+
 
 function latestUserText(messages: readonly ThreadMessage[]): string {
   const lastUser = [...messages].reverse().find((message) => message.role === "user");
@@ -479,11 +466,124 @@ function ChatHeader({
         <span className="extensionCount" data-testid="extension-count">
           {status?.extensions?.length ?? 0} ext
         </span>
+        <ApprovalReview />
         <TooltipIconButton tooltip="Share" className="iconButton" disabled>
           <Share size={18} />
         </TooltipIconButton>
       </div>
     </header>
+  );
+}
+
+function ApprovalReview() {
+  const [open, setOpen] = useState(false);
+  const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+
+  const pending = approvals.filter((approval) => approval.status === "pending");
+
+  async function refreshApprovals() {
+    setLoading(true);
+    try {
+      const data = await fetchJson<{ approvals: ApprovalRequest[] }>(`${apiBase}/approvals?status=pending`);
+      setApprovals(data.approvals);
+      setStatus(null);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Approvals unavailable");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void refreshApprovals();
+  }, []);
+
+  useEffect(() => {
+    if (open) void refreshApprovals();
+  }, [open]);
+
+  async function decide(id: string, decision: "approved" | "denied") {
+    setStatus(decision === "approved" ? "Approving" : "Denying");
+    try {
+      await fetchJson<{ approval: ApprovalRequest }>(`${apiBase}/approvals/${id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ decision, reason: "Reviewed in renderer approval queue." })
+      });
+      await refreshApprovals();
+      setStatus(decision === "approved" ? "Approved" : "Denied");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Approval update failed");
+    }
+  }
+
+  return (
+    <Sheet open={open} onOpenChange={setOpen}>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <SheetTrigger
+              render={<Button variant="ghost" size="icon" className="approvalButton" data-testid="approval-review-button" />}
+            />
+          }
+        >
+          <ShieldCheck size={18} />
+          {pending.length > 0 && <span className="approvalBadge" data-testid="approval-pending-count">{pending.length}</span>}
+          <span className="srOnly">Review approvals</span>
+        </TooltipTrigger>
+        <TooltipContent>Review approvals</TooltipContent>
+      </Tooltip>
+      <SheetContent side="right" className="approvalSheet" data-testid="approval-review-panel">
+        <div className="approvalHeader">
+          <div>
+            <h2>Approvals</h2>
+            <p>{pending.length} pending request{pending.length === 1 ? "" : "s"}</p>
+          </div>
+          <Button variant="ghost" size="icon" className="iconButton" onClick={() => void refreshApprovals()} disabled={loading}>
+            <RefreshCw size={16} />
+          </Button>
+        </div>
+        {status && <p className="approvalStatus" data-testid="approval-review-status">{status}</p>}
+        <div className="approvalList" data-testid="approval-list">
+          {pending.length === 0 ? (
+            <div className="approvalEmpty">No pending approvals</div>
+          ) : (
+            pending.map((approval) => (
+              <article className="approvalItem" key={approval.id}>
+                <div className="approvalItemHeader">
+                  <strong>{approval.action}</strong>
+                  <span>{new Date(approval.createdAt).toLocaleString()}</span>
+                </div>
+                <p>{approval.reason}</p>
+                <dl>
+                  <div>
+                    <dt>Capability</dt>
+                    <dd>{approval.extensionId ?? "unknown"} / {approval.capabilityId ?? "unknown"}</dd>
+                  </div>
+                  <div>
+                    <dt>Permissions</dt>
+                    <dd>{approval.permissions.join(", ") || "none"}</dd>
+                  </div>
+                </dl>
+                <pre>{JSON.stringify(approval.input, null, 2)}</pre>
+                <div className="approvalActions">
+                  <Button variant="outline" className="approvalDeny" onClick={() => void decide(approval.id, "denied")}>
+                    <X size={15} />
+                    Deny
+                  </Button>
+                  <Button className="approvalApprove" onClick={() => void decide(approval.id, "approved")}>
+                    <Check size={15} />
+                    Approve
+                  </Button>
+                </div>
+              </article>
+            ))
+          )}
+        </div>
+      </SheetContent>
+    </Sheet>
   );
 }
 
@@ -494,6 +594,15 @@ function useAgentAssistantRuntime() {
         const content = latestUserText(messages);
         if (!content) {
           yield { content: [{ type: "text", text: "请输入你的问题。" }] };
+          return;
+        }
+
+        const voiceCacheKey = `${unstable_threadId ?? "new"}:${content}`;
+        const voiceResponse = pendingVoiceResponses.get(voiceCacheKey);
+        if (voiceResponse) {
+          pendingVoiceResponses.delete(voiceCacheKey);
+          const degraded = voiceResponse.degradedReason ? `\n\n降级原因：${voiceResponse.degradedReason}` : "";
+          yield { content: [{ type: "text", text: `${voiceResponse.assistantText}${degraded}` }] };
           return;
         }
 
@@ -538,7 +647,6 @@ function AssistantThread() {
             <ArrowDown size={16} />
           </ThreadPrimitive.ScrollToBottom>
           <AssistantComposer />
-          <PromptChips />
         </ThreadPrimitive.ViewportFooter>
       </ThreadPrimitive.Viewport>
     </ThreadPrimitive.Root>
@@ -621,56 +729,6 @@ function MessageActions({ role }: { role: "user" | "assistant" | "system" | "too
   );
 }
 
-function PromptChips() {
-  const aui = useAui();
-  const [expandedLabel, setExpandedLabel] = useState<string | null>(null);
-  const isEmpty = useAuiState(isNewChatView);
-  const isRunning = useAuiState((state) => state.thread.isRunning);
-  if (!isEmpty) return <div className="promptChips hidden" data-testid="prompt-chips" />;
-  const expandedGroup = suggestionGroups.find((group) => group.label === expandedLabel);
-  const sendPrompt = (prompt: string) => {
-    if (isRunning) return;
-    aui.thread().append({
-      content: [{ type: "text", text: prompt }],
-      runConfig: aui.composer().getState().runConfig
-    });
-  };
-  return (
-    <div className="promptChips" data-testid="prompt-chips">
-      <div className="promptChipRow">
-        {suggestionGroups.map((group) => {
-          const Icon = group.icon;
-          return (
-            <Button
-              key={group.label}
-              variant="outline"
-              className={cn("promptChip", expandedLabel === group.label && "active")}
-              onClick={() => setExpandedLabel((current) => (current === group.label ? null : group.label))}
-            >
-              <Icon size={18} />
-              {group.label}
-            </Button>
-          );
-        })}
-      </div>
-      {expandedGroup && (
-        <div className="promptOptionRow">
-          {expandedGroup.options.map((option) => (
-            <Button
-              key={option.label}
-              variant="ghost"
-              className="promptOption"
-              onClick={() => sendPrompt(option.prompt)}
-            >
-              {option.label}
-            </Button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function AssistantComposer() {
   const isRunning = useAuiState((state) => state.thread.isRunning);
   return (
@@ -698,9 +756,7 @@ function AssistantComposer() {
             </DropdownMenuContent>
           </DropdownMenu>
           <span className="composerSpacer" />
-          <Button variant="ghost" size="icon" className="composerIcon" title="Voice input will be added in the speech phase" disabled data-testid="voice-slot">
-            <Mic size={21} />
-          </Button>
+          <VoiceRecorderButton />
           {isRunning ? (
             <ComposerPrimitive.Cancel className="sendButton" title="Stop generating">
               <Square size={18} />
@@ -714,6 +770,252 @@ function AssistantComposer() {
       </div>
     </ComposerPrimitive.Root>
   );
+}
+
+function VoiceRecorderButton() {
+  const aui = useAui();
+  const isRunning = useAuiState((state) => state.thread.isRunning);
+  const threadId = useAuiState((state) => state.threads.mainThreadId);
+  const [voiceStatus, setVoiceStatus] = useState<VoiceStatus | null>(null);
+  const [open, setOpen] = useState(false);
+  const [state, setState] = useState<"idle" | "recording" | "sending" | "playing" | "degraded">("idle");
+  const [message, setMessage] = useState<string | null>(null);
+  const [transcript, setTranscript] = useState<string | null>(null);
+  const [assistantText, setAssistantText] = useState<string | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<BlobPart[]>([]);
+  const streamRef = useRef<MediaStream | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadVoiceStatus() {
+      try {
+        const status = await fetchJson<VoiceStatus>(`${apiBase}/voice/status`);
+        if (cancelled) return;
+        setVoiceStatus(status);
+        if (!status.ready) {
+          setState("degraded");
+          setMessage(status.degradedReason ?? "Voice providers unavailable");
+        }
+      } catch (error) {
+        if (cancelled) return;
+        setState("degraded");
+        setMessage(error instanceof Error ? error.message : "Voice status unavailable");
+      }
+    }
+    void loadVoiceStatus();
+    return () => {
+      cancelled = true;
+      stopStream(streamRef.current);
+      audioRef.current?.pause();
+    };
+  }, []);
+
+  const disabled = isRunning || state === "sending" || state === "playing" || !voiceStatus?.ready;
+  const tooltip = state === "recording"
+    ? "Stop recording"
+    : voiceStatus?.ready
+      ? "Open voice call"
+      : message ?? "Voice unavailable";
+  const callStatus = voiceCallStatusLabel(state, voiceStatus, message);
+
+  async function startRecording() {
+    if (disabled && state !== "recording") return;
+    setMessage(null);
+    setTranscript(null);
+    setAssistantText(null);
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) throw new Error("Microphone capture is not available in this browser.");
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      chunksRef.current = [];
+      const mimeType = pickAudioMimeType();
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      recorderRef.current = recorder;
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) chunksRef.current.push(event.data);
+      };
+      recorder.onstop = () => {
+        const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
+        chunksRef.current = [];
+        stopStream(streamRef.current);
+        streamRef.current = null;
+        void sendVoiceBlob(blob);
+      };
+      recorder.start();
+      setState("recording");
+    } catch (error) {
+      setState("degraded");
+      setMessage(error instanceof Error ? error.message : "Microphone capture failed");
+    }
+  }
+
+  function stopRecording() {
+    const recorder = recorderRef.current;
+    if (!recorder || recorder.state === "inactive") return;
+    setState("sending");
+    recorder.stop();
+  }
+
+  async function sendVoiceBlob(blob: Blob) {
+    setState("sending");
+    try {
+      const audioBase64 = await blobToBase64(blob);
+      const response = await fetchJson<VoiceChatResponse>(`${apiBase}/voice/chat`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          audioBase64,
+          mimeType: blob.type || "audio/webm",
+          sessionId: threadId
+        })
+      });
+      if (!response.transcript) throw new Error(response.degradedReason ?? "Voice transcript was empty.");
+      setTranscript(response.transcript);
+      setAssistantText(response.assistantText || null);
+      pendingVoiceResponses.set(`${threadId ?? "new"}:${response.transcript}`, response);
+      aui.thread().append({
+        content: [{ type: "text", text: response.transcript }],
+        runConfig: aui.composer().getState().runConfig
+      });
+      if (response.audioBase64 && response.mimeType) await playAudio(response.audioBase64, response.mimeType);
+      setMessage(response.degradedReason ?? null);
+      setState(response.degradedReason ? "degraded" : "idle");
+    } catch (error) {
+      setState("degraded");
+      setMessage(error instanceof Error ? error.message : "Voice chat failed");
+    }
+  }
+
+  function closeCall() {
+    const recorder = recorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
+      recorder.onstop = null;
+      recorder.stop();
+    }
+    stopStream(streamRef.current);
+    streamRef.current = null;
+    chunksRef.current = [];
+    audioRef.current?.pause();
+    setOpen(false);
+    if (state !== "degraded") setState("idle");
+  }
+
+  async function playAudio(audioBase64: string, mimeType: string) {
+    if (!mimeType.startsWith("audio/")) return;
+    setState("playing");
+    const audio = new Audio(`data:${mimeType};base64,${audioBase64}`);
+    audioRef.current = audio;
+    await new Promise<void>((resolve) => {
+      audio.onended = () => resolve();
+      audio.onerror = () => resolve();
+      void audio.play().catch(() => resolve());
+    });
+  }
+
+  return (
+    <>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon"
+              className={cn("composerIcon voiceButton", state)}
+              title={tooltip}
+              disabled={isRunning}
+              data-testid="voice-slot"
+              data-voice-state={state}
+              onClick={() => setOpen(true)}
+            />
+          }
+        >
+          {state === "sending" ? <Upload size={20} /> : <Mic size={21} />}
+        </TooltipTrigger>
+        <TooltipContent>{message ?? tooltip}</TooltipContent>
+      </Tooltip>
+      {open && (
+        <div className="voiceCallBackdrop" data-testid="voice-call-overlay" role="presentation">
+          <section className="voiceCallPanel" role="dialog" aria-modal="true" aria-label="Voice call" data-voice-state={state}>
+            <header className="voiceCallHeader">
+              <div>
+                <span>Voice Call</span>
+                <strong>{callStatus}</strong>
+              </div>
+              <Button variant="ghost" size="icon" className="voiceCallClose" onClick={closeCall} aria-label="Close voice call">
+                <X size={18} />
+              </Button>
+            </header>
+            <div className="voiceCallBody">
+              <div className={cn("voiceAvatar", state === "recording" && "listening", state === "playing" && "speaking")}>
+                <Bot size={42} />
+                <span aria-hidden="true" />
+              </div>
+              <div className="voiceProviderRow">
+                <span>{voiceStatus?.stt.name ?? "stt"}</span>
+                <span>{voiceStatus?.tts.name ?? "tts"}</span>
+              </div>
+              <div className="voiceCallCards">
+                <article>
+                  <span>Transcript</span>
+                  <p>{transcript ?? "No transcript yet."}</p>
+                </article>
+                <article>
+                  <span>Assistant</span>
+                  <p>{assistantText ?? message ?? "Ready for a voice turn."}</p>
+                </article>
+              </div>
+            </div>
+            <footer className="voiceCallControls">
+              <Button
+                className={cn("voicePrimaryControl", state === "recording" && "recording")}
+                disabled={disabled && state !== "recording"}
+                onClick={state === "recording" ? stopRecording : () => void startRecording()}
+              >
+                {state === "recording" ? <Square size={19} /> : <Mic size={20} />}
+                {state === "recording" ? "Stop" : "Talk"}
+              </Button>
+              <Button className="voiceEndControl" onClick={closeCall}>
+                <X size={19} />
+                End
+              </Button>
+            </footer>
+          </section>
+        </div>
+      )}
+    </>
+  );
+}
+
+function voiceCallStatusLabel(state: "idle" | "recording" | "sending" | "playing" | "degraded", status: VoiceStatus | null, message: string | null) {
+  if (!status?.ready) return message ?? status?.degradedReason ?? "Voice unavailable";
+  if (state === "recording") return "Listening";
+  if (state === "sending") return "Thinking";
+  if (state === "playing") return "Speaking";
+  if (state === "degraded") return message ?? "Degraded";
+  return "Ready";
+}
+
+function pickAudioMimeType() {
+  const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
+  return candidates.find((candidate) => MediaRecorder.isTypeSupported(candidate));
+}
+
+function stopStream(stream: MediaStream | null) {
+  stream?.getTracks().forEach((track) => track.stop());
+}
+
+function blobToBase64(blob: Blob) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result ?? "");
+      resolve(result.includes(",") ? result.split(",")[1] ?? "" : result);
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("Failed to read audio blob."));
+    reader.readAsDataURL(blob);
+  });
 }
 
 const rootRoute = createRootRoute({

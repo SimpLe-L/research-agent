@@ -61,6 +61,30 @@ const memorySkill: ExtensionManifest = {
       permissions: ["memory:write_candidate"],
       inputSchema: "createMemoryCandidateSchema",
       outputSchema: "{ accepted: boolean, memoryId: string, memory: memoryEntry }"
+    },
+    {
+      id: "memory.promote_fact",
+      label: "Promote memory fact",
+      description: "Promote a memory candidate into an accepted durable fact.",
+      permissions: ["memory:write"],
+      inputSchema: "{ id: string, reason: string }",
+      outputSchema: "{ memory: memoryEntry, auditEvents: memoryAuditEvent[] }"
+    },
+    {
+      id: "memory.update",
+      label: "Update memory",
+      description: "Update an existing memory entry while preserving audit history.",
+      permissions: ["memory:write"],
+      inputSchema: "{ id: string, content?: string, tags?: string[], confidence?: number, provenance?: object }",
+      outputSchema: "{ memory: memoryEntry, auditEvents: memoryAuditEvent[] }"
+    },
+    {
+      id: "memory.merge",
+      label: "Merge memories",
+      description: "Create a promoted memory from related source memories and tombstone the superseded entries.",
+      permissions: ["memory:write"],
+      inputSchema: "mergeMemorySchema",
+      outputSchema: "{ memory: memoryEntry, mergedFrom: string[], auditEvents: memoryAuditEvent[] }"
     }
   ]
 };
@@ -81,6 +105,46 @@ const localContextSkill: ExtensionManifest = {
       permissions: ["context:read"],
       inputSchema: "{}",
       outputSchema: "{ now: string, timezone: string, runtimeProvider: string, extensionIds: string[] }"
+    }
+  ]
+};
+
+const localProjectSkill: ExtensionManifest = {
+  id: "local.project",
+  name: "Local Project Knowledge",
+  description: "Read-only project-document skill backed by the workflow runner and restricted to allowlisted repository docs.",
+  kind: "skill",
+  phase: "phase-4",
+  status: "active",
+  entrypoint: "/api/extensions/local.project/invoke",
+  capabilities: [
+    {
+      id: "project.search_docs",
+      label: "Search project docs",
+      description: "Run a workflow that searches allowlisted local project documents for relevant context.",
+      permissions: ["project_docs:read", "workflow:run"],
+      inputSchema: "projectDocSearchSchema",
+      outputSchema: "{ workflow: workflowRun }"
+    }
+  ]
+};
+
+const localBookmarksConnector: ExtensionManifest = {
+  id: "local.bookmarks",
+  name: "Local Bookmarks Connector",
+  description: "Read-only connector for user-supplied local bookmark data stored under the app data directory.",
+  kind: "connector",
+  phase: "phase-4",
+  status: "active",
+  entrypoint: "/api/extensions/local.bookmarks/invoke",
+  capabilities: [
+    {
+      id: "bookmarks.search",
+      label: "Search local bookmarks",
+      description: "Search configured local bookmark records without calling external services or mutating state.",
+      permissions: ["bookmarks:read", "connector:read"],
+      inputSchema: "localBookmarkSearchSchema",
+      outputSchema: "{ bookmarks: localBookmark[], degradedReason?: string }"
     }
   ]
 };
@@ -114,7 +178,7 @@ const speechSkill: ExtensionManifest = {
   degradedReason: "Speech provider adapters are planned but not implemented yet."
 };
 
-const manifests: ExtensionManifest[] = [coreAgentShell, memorySkill, localContextSkill, speechSkill];
+const manifests: ExtensionManifest[] = [coreAgentShell, memorySkill, localContextSkill, localProjectSkill, localBookmarksConnector, speechSkill];
 
 export function getExtensionRuntimeStatus(): ExtensionRuntimeStatus {
   return {

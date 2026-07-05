@@ -13,10 +13,16 @@ const requiredBundleMarkers = [
   "assistant-empty-state",
   "assistant-composer",
   "voice-slot",
+  "voice-call-overlay",
+  "data-voice-state",
+  "/voice/chat",
   "model-tabs",
   "prompt-chips",
   "provider-status-button",
-  "extension-count"
+  "extension-count",
+  "approval-review-button",
+  "approval-review-panel",
+  "approval-list"
 ];
 
 let previewProcess;
