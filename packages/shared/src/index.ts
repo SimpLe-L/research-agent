@@ -337,7 +337,13 @@ export const voiceChatResponseSchema = z.object({
   assistantText: z.string(),
   audioBase64: z.string().optional(),
   mimeType: z.string().optional(),
-  degradedReason: z.string().optional()
+  degradedReason: z.string().optional(),
+  timing: z.object({
+    sttMs: z.number().int().nonnegative(),
+    agentMs: z.number().int().nonnegative(),
+    ttsMs: z.number().int().nonnegative(),
+    totalMs: z.number().int().nonnegative()
+  }).optional()
 });
 export type VoiceChatResponse = z.infer<typeof voiceChatResponseSchema>;
 

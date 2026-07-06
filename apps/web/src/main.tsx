@@ -108,6 +108,12 @@ type VoiceChatResponse = {
   audioBase64?: string;
   mimeType?: string;
   degradedReason?: string;
+  timing?: {
+    sttMs: number;
+    agentMs: number;
+    ttsMs: number;
+    totalMs: number;
+  };
 };
 
 const pendingVoiceResponses = new Map<string, VoiceChatResponse>();
@@ -1104,6 +1110,7 @@ function VoiceRecorderButton() {
         })
       });
       if (!response.transcript) throw new Error(response.degradedReason ?? "Voice transcript was empty.");
+      logVoiceTiming(response.timing);
       pendingVoiceResponses.set(`${threadId ?? "new"}:${response.transcript}`, response);
       aui.thread().append({
         content: [{ type: "text", text: response.transcript }],
@@ -1275,6 +1282,20 @@ function providerNotReadyReason(label: "STT" | "TTS", provider: ProviderStatus &
   if (!provider.configured) return `${label} 未配置：${provider.degradedReason ?? provider.name}`;
   if (!provider.reachable) return `${label} 未就绪：${provider.degradedReason ?? provider.name}`;
   return undefined;
+}
+
+function logVoiceTiming(timing: VoiceChatResponse["timing"]) {
+  if (!timing) return;
+  console.info("[voice.chat timing]", {
+    stt: formatMs(timing.sttMs),
+    agent: formatMs(timing.agentMs),
+    tts: formatMs(timing.ttsMs),
+    total: formatMs(timing.totalMs)
+  });
+}
+
+function formatMs(ms: number) {
+  return ms >= 1000 ? `${(ms / 1000).toFixed(2)}s` : `${ms}ms`;
 }
 
 function pickAudioMimeType() {
