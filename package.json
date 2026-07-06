@@ -8,6 +8,7 @@
     "dev:api": "pnpm --filter @sp-agent/api dev",
     "dev:web": "pnpm --filter @sp-agent/web dev",
     "dev:desktop": "pnpm build && pnpm --filter @sp-agent/desktop start",
+    "speech:stt:funasr": ".venv-funasr/bin/funasr-server --host 127.0.0.1 --port 8000 --device cpu --model sensevoice",
     "electron:install": "ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ node apps/desktop/node_modules/electron/install.js",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",

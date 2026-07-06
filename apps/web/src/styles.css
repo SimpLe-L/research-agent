@@ -267,6 +267,11 @@ p {
   color: oklch(0.55 0.16 35);
 }
 
+.voiceButton[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.68;
+}
+
 .voiceCallBackdrop {
   align-items: center;
   background: rgb(20 20 18 / 28%);
@@ -285,66 +290,38 @@ p {
   box-shadow: 0 28px 80px rgb(0 0 0 / 30%);
   color: #f7f7f4;
   display: grid;
-  grid-template-rows: auto 1fr auto;
-  max-height: min(680px, calc(100vh - 48px));
-  min-height: 560px;
+  grid-template-rows: auto 1fr;
+  max-height: min(560px, calc(100vh - 48px));
+  min-height: 520px;
   overflow: hidden;
-  width: min(420px, calc(100vw - 48px));
-}
-
-.voiceCallHeader,
-.voiceCallControls {
-  align-items: center;
-  display: flex;
+  width: min(360px, calc(100vw - 48px));
 }
 
 .voiceCallHeader {
-  justify-content: space-between;
-  padding: 18px 18px 8px;
-}
-
-.voiceCallHeader div {
-  display: grid;
-  gap: 4px;
-}
-
-.voiceCallHeader span,
-.voiceCallCards span,
-.voiceAuditSummary span {
-  color: #b8bbb2;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.voiceCallHeader strong {
-  color: #ffffff;
-  font-size: 18px;
-  font-weight: 720;
-  line-height: 1.2;
-  max-width: 300px;
-  overflow-wrap: anywhere;
+  align-items: center;
+  display: flex;
+  justify-content: flex-end;
+  padding: 14px 14px 0;
 }
 
 .voiceCallClose {
   color: #d9dad4;
 }
 
-.voiceHeaderActions,
-.voiceProviderRow {
-  display: flex;
-  gap: 8px;
-}
-
 .voiceCallBody {
+  align-items: center;
   display: grid;
-  gap: 14px;
+  gap: 22px;
+  justify-content: center;
   min-height: 0;
-  overflow: auto;
-  padding: 22px 22px 18px;
+  overflow: hidden;
+  padding: 28px 22px 88px;
+  text-align: center;
 }
 
 .voiceAvatar {
   align-items: center;
+  appearance: none;
   background: linear-gradient(145deg, #4b514b, #292b28);
   border: 1px solid rgb(255 255 255 / 14%);
   border-radius: 999px;
@@ -353,8 +330,18 @@ p {
   height: 138px;
   justify-content: center;
   justify-self: center;
+  padding: 0;
   position: relative;
   width: 138px;
+}
+
+.voiceAvatar:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.voiceAvatar:not(:disabled) {
+  cursor: pointer;
 }
 
 .voiceAvatar svg {
@@ -381,110 +368,14 @@ p {
   background: linear-gradient(145deg, #5f6b5e, #30372f);
 }
 
-.voiceProviderRow {
-  justify-content: center;
-}
-
-.voiceProviderRow span,
-.voiceReadinessGrid span {
-  background: rgb(255 255 255 / 9%);
-  border-radius: 999px;
-  color: #e8eae1;
-  font-size: 12px;
-  line-height: 1;
-  max-width: 160px;
-  overflow: hidden;
-  padding: 7px 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.voiceReadinessGrid,
-.voiceCallCards,
-.voiceAuditSummary {
-  display: grid;
-  gap: 8px;
-}
-
-.voiceReadinessGrid article,
-.voiceCallCards article,
-.voiceAuditSummary {
-  background: rgb(255 255 255 / 7%);
-  border: 1px solid rgb(255 255 255 / 9%);
-  border-radius: 10px;
-  display: grid;
-  gap: 7px;
-  padding: 12px;
-}
-
-.voiceReadinessGrid article {
-  border-left: 3px solid #858983;
-}
-
-.voiceReadinessGrid article[data-status="ready"] {
-  border-left-color: #8fcf88;
-}
-
-.voiceReadinessGrid article[data-status="degraded"],
-.voiceReadinessGrid article[data-status="missing"] {
-  border-left-color: #e1ae5a;
-}
-
-.voiceReadinessGrid article div {
-  align-items: center;
-  display: flex;
-  gap: 10px;
-  justify-content: space-between;
-}
-
-.voiceReadinessGrid strong {
-  color: #f6f7f0;
-  font-size: 13px;
-  line-height: 1.2;
-}
-
-.voiceReadinessGrid p,
-.voiceCallCards p,
-.voiceAuditSummary p {
-  color: #eef0e8;
-  font-size: 13px;
-  line-height: 1.45;
+.voiceCallStatus {
+  color: #f4f5ef;
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.4;
+  margin: 0;
+  max-width: 280px;
   overflow-wrap: anywhere;
-}
-
-.voiceCallCards p {
-  font-size: 14px;
-  max-height: 92px;
-  overflow: auto;
-}
-
-.voiceCallControls {
-  border-top: 1px solid rgb(255 255 255 / 8%);
-  gap: 10px;
-  justify-content: center;
-  padding: 16px 18px 18px;
-}
-
-.voicePrimaryControl,
-.voiceEndControl {
-  border-radius: 999px;
-  gap: 8px;
-  min-width: 112px;
-}
-
-.voicePrimaryControl {
-  background: #eef0e8;
-  color: #1f201e;
-}
-
-.voicePrimaryControl.recording {
-  background: #f5c453;
-  color: #221f17;
-}
-
-.voiceEndControl {
-  background: #b82f38;
-  color: #ffffff;
 }
 
 @keyframes thinkingDotPulse {

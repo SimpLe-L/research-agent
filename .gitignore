@@ -1,4 +1,5 @@
 node_modules
+.venv-funasr/
 .pnpm-store/
 .cache/
 .electron-cache/

@@ -121,7 +121,7 @@ Complete when:
 - `pnpm smoke:desktop:api-child` verifies the same Node child-process strategy Electron uses can load the Pi SDK and read the extension registry.
 - The renderer header shows the active extension count so the shell exposes extension capacity without adding a complex workbench UI.
 - The renderer header includes an approval review entry with pending count, a right-side review panel, and approve/deny actions backed by `/api/approvals`.
-- `packages/speech` defines STT/TTS provider adapter contracts with deterministic smoke adapters, explicit degraded states, `openai-audio-transcriptions-stt`, legacy `openai-compatible-stt`, self-hosted `gpt-sovits-api`, and cloud `minimax-t2a-v2`.
+- `packages/speech` defines STT/TTS provider adapter contracts with deterministic smoke adapters, explicit degraded states, `openai-audio-transcriptions-stt`, legacy `openai-compatible-stt`, self-hosted `gpt-sovits-api`, cloud `minimax-t2a-v2`, and cloud `mimo-v2.5-tts`.
 - API voice endpoints exist for Phase 1 half-duplex chat: `GET /api/voice/status`, `POST /api/voice/transcribe`, `POST /api/voice/synthesize`, and `POST /api/voice/chat`.
 - Voice chat reuses the existing agent message path after STT, so transcripts get normal session persistence, memory retrieval, runtime behavior, and skill boundaries.
 - Voice transcript messages are persisted with provenance metadata (`source: voice`, `sttProvider`, `audioPersisted: false`), and raw audio is not persisted.
@@ -129,9 +129,9 @@ Complete when:
 - `GET /api/voice/audit` exposes local voice audit events for transcribe/synthesize requested, completed, and degraded states.
 - Renderer composer mic opens a dedicated voice call overlay wired to the API-owned voice chat path with recording, sending, playing, transcript, assistant response, provider readiness, latest voice audit event, and degraded UI states. Missing speech providers keep typed chat usable and show a degraded voice state.
 - `pnpm smoke:api:speech` verifies deterministic STT/TTS, dynamic `local.speech` readiness, settings readiness, voice audit events, voice chat session persistence, and audio non-persistence metadata.
-- `pnpm smoke:speech:providers` verifies OpenAI audio transcriptions STT, legacy `openai-compatible-stt`, `gpt-sovits-api`, and `minimax-t2a-v2` against local mock HTTP providers, including request payloads, response parsing, binary audio handling, and degraded HTTP/provider-error/empty-response paths.
+- `pnpm smoke:speech:providers` verifies OpenAI audio transcriptions STT, legacy `openai-compatible-stt`, `gpt-sovits-api`, `minimax-t2a-v2`, and `mimo-v2.5-tts` against local mock HTTP providers, including request payloads, response parsing, binary audio handling, and degraded HTTP/provider-error/empty-response paths.
 - `pnpm smoke:speech:live` is available for explicit live provider checks. It skips by default and only calls configured real STT/TTS providers when `SPEECH_PROVIDER_LIVE_SMOKE=1` is set.
-- Speech provider setup is documented in `ARCHITECTURE.md`: either self-host FunASR STT plus GPT-SoVITS TTS, or use MiniMax cloud TTS with an OpenAI-compatible transcription endpoint.
+- Speech provider setup is documented in `ARCHITECTURE.md`: either self-host FunASR STT plus GPT-SoVITS TTS, or use MiniMax/MiMo cloud TTS with an OpenAI-compatible transcription endpoint.
 - Memory v2 is now the next active memory direction. It keeps memory API-owned and auditable while adding typed memory kinds inspired by voice-chat systems such as MoeChat: `core` for durable preferences/facts, `journal` for time-addressable conversation events, `summary` for compressed session/time-window context, `procedural` for reusable working habits, and `project` for project facts.
 - Memory v2 should add temporal search, retrieval gating, and an explicit retrieval strategy layer before expanding into embeddings or external memory frameworks. `mem0`-style engines may be introduced later only as memory extraction/retrieval adapters behind the app-owned schema, approval, provenance, and audit model.
 - LanceDB is the first optional Memory v2 vector backend. Keep it local-first under `MEMORY_LANCEDB_URI` or `SP_AGENT_DATA_DIR/lancedb`; SiliconFlow `BAAI/bge-m3` is the first real embedding provider, with deterministic embeddings retained for smoke/offline development when no `SILICONFLOW_API_KEY` is configured or `MEMORY_EMBEDDING_PROVIDER=deterministic` is set.
@@ -300,16 +300,16 @@ Deliverables:
 - Add `packages/speech` for STT/TTS provider contracts. Done.
 - Add API voice session flow for half-duplex chat. Done for missing, deterministic, and optional provider paths.
 - Add renderer record/transcribe/send/playback flow. Done through the dedicated voice call overlay on the API-owned voice path.
-- Add provider readiness for STT/TTS. Done for missing, deterministic, `openai-audio-transcriptions-stt`, legacy `openai-compatible-stt`, `gpt-sovits-api`, and `minimax-t2a-v2`.
+- Add provider readiness for STT/TTS. Done for missing, deterministic, `openai-audio-transcriptions-stt`, legacy `openai-compatible-stt`, `gpt-sovits-api`, `minimax-t2a-v2`, and `mimo-v2.5-tts`.
 - Add speech audit events. Done for transcribe/synthesize requested, completed, and degraded states.
-- Add provider adapter contract smoke. Done for OpenAI audio transcriptions STT, legacy `openai-compatible-stt`, `gpt-sovits-api`, and `minimax-t2a-v2` through local mock HTTP providers.
+- Add provider adapter contract smoke. Done for OpenAI audio transcriptions STT, legacy `openai-compatible-stt`, `gpt-sovits-api`, `minimax-t2a-v2`, and `mimo-v2.5-tts` through local mock HTTP providers.
 - Add gated live provider smoke. Done with `pnpm smoke:speech:live`; set `SPEECH_PROVIDER_LIVE_SMOKE=1` and provider env to execute real STT/TTS calls.
 - Keep raw audio persistence disabled by default. Done in API metadata/policy.
 
 Supported live provider tracks:
 
 - Self-hosted: `SPEECH_STT_PROVIDER=openai-audio-transcriptions-stt` pointed at FunASR's `/v1/audio/transcriptions`, plus `SPEECH_TTS_PROVIDER=gpt-sovits-api` pointed at GPT-SoVITS `/tts`.
-- Cloud TTS: `SPEECH_TTS_PROVIDER=minimax-t2a-v2` with MiniMax keys, plus an OpenAI-compatible transcription endpoint for STT.
+- Cloud TTS: `SPEECH_TTS_PROVIDER=minimax-t2a-v2` or `mimo-v2.5-tts` with provider keys, plus an OpenAI-compatible transcription endpoint for STT.
 
 Acceptance:
 

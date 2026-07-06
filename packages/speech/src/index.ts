@@ -5,6 +5,7 @@ import type {
   VoiceTranscribeInput,
   VoiceTranscribeResponse
 } from "@sp-agent/shared";
+import { Socket } from "node:net";
 
 export type SttProviderAdapter = {
   id: string;
@@ -54,11 +55,17 @@ const openAiCompatibleSttAdapter: SttProviderAdapter = {
   label: "OpenAI-Compatible STT",
   getStatus: async (env = process.env) => {
     const missing = missingOpenAiCompatibleSttConfig(env);
+    const localEndpoint = missing.length === 0 ? parseLocalEndpoint(env.OPENAI_COMPATIBLE_STT_URL) : undefined;
+    const localReachability = localEndpoint ? await checkTcpReachability(localEndpoint) : undefined;
     return {
       name: "openai-compatible-stt",
       configured: missing.length === 0,
-      reachable: missing.length === 0,
-      degradedReason: missing.length > 0 ? `OpenAI-compatible STT is missing ${missing.join(", ")}.` : undefined
+      reachable: missing.length === 0 && (localReachability?.reachable ?? true),
+      degradedReason: missing.length > 0
+        ? `OpenAI-compatible STT is missing ${missing.join(", ")}.`
+        : localReachability?.reachable === false
+          ? `OpenAI-compatible STT local endpoint ${localEndpoint?.host}:${localEndpoint?.port} is not reachable. Start FunASR/SenseVoice first.`
+          : undefined
     };
   },
   transcribe: async (input, env = process.env) => {
@@ -318,8 +325,73 @@ const minimaxT2aV2TtsAdapter: TtsProviderAdapter = {
   }
 };
 
+const mimoV25TtsAdapter: TtsProviderAdapter = {
+  id: "mimo-v2.5-tts",
+  label: "MiMo V2.5 TTS",
+  getStatus: async (env = process.env) => {
+    const missing = missingMimoTtsConfig(env);
+    return {
+      name: "mimo-v2.5-tts",
+      configured: missing.length === 0,
+      reachable: missing.length === 0,
+      degradedReason: missing.length > 0 ? `MiMo V2.5 TTS is missing ${missing.join(", ")}.` : undefined
+    };
+  },
+  synthesize: async (input, env = process.env) => {
+    const missing = missingMimoTtsConfig(env);
+    if (missing.length > 0) {
+      return {
+        provider: "mimo-v2.5-tts",
+        degradedReason: `MiMo V2.5 TTS is missing ${missing.join(", ")}.`
+      };
+    }
+
+    try {
+      const response = await fetch(env.MIMO_TTS_URL || "https://api.xiaomimimo.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "api-key": requiredEnv(env.MIMO_API_KEY)
+        },
+        body: JSON.stringify(buildMimoTtsPayload(input, env))
+      });
+      const text = await response.text();
+      if (!response.ok) {
+        return {
+          provider: "mimo-v2.5-tts",
+          degradedReason: `MiMo V2.5 TTS returned HTTP ${response.status}: ${text}`
+        };
+      }
+      const json = text ? JSON.parse(text) as Record<string, unknown> : {};
+      const error = extractMimoError(json);
+      if (error) {
+        return {
+          provider: "mimo-v2.5-tts",
+          degradedReason: error
+        };
+      }
+      const audioBase64 = extractMimoAudioBase64(json);
+      return audioBase64
+        ? {
+            audioBase64,
+            mimeType: mimeTypeFromAudioFormat(env.MIMO_TTS_FORMAT || "mp3"),
+            provider: "mimo-v2.5-tts"
+          }
+        : {
+            provider: "mimo-v2.5-tts",
+            degradedReason: "MiMo V2.5 TTS response did not include audio data."
+          };
+    } catch (error) {
+      return {
+        provider: "mimo-v2.5-tts",
+        degradedReason: error instanceof Error ? error.message : "MiMo V2.5 TTS request failed."
+      };
+    }
+  }
+};
+
 const sttAdapters: SttProviderAdapter[] = [missingSttAdapter, deterministicSttAdapter, openAiCompatibleSttAdapter, openAiAudioTranscriptionsSttAdapter];
-const ttsAdapters: TtsProviderAdapter[] = [missingTtsAdapter, deterministicTtsAdapter, gptSovitsApiTtsAdapter, minimaxT2aV2TtsAdapter];
+const ttsAdapters: TtsProviderAdapter[] = [missingTtsAdapter, deterministicTtsAdapter, gptSovitsApiTtsAdapter, minimaxT2aV2TtsAdapter, mimoV25TtsAdapter];
 
 export function listSttProviderAdapters(): SttProviderAdapter[] {
   return sttAdapters;
@@ -363,6 +435,37 @@ function missingOpenAiCompatibleSttConfig(env: NodeJS.ProcessEnv): string[] {
   return ["OPENAI_COMPATIBLE_STT_URL", "OPENAI_COMPATIBLE_STT_API_KEY", "OPENAI_COMPATIBLE_STT_MODEL"].filter((key) => !env[key]);
 }
 
+function parseLocalEndpoint(rawUrl: string | undefined): { host: string; port: number } | undefined {
+  if (!rawUrl) return undefined;
+  try {
+    const url = new URL(rawUrl);
+    const host = url.hostname.replace(/^\[(.*)\]$/, "$1");
+    if (!["localhost", "127.0.0.1", "::1"].includes(host)) return undefined;
+    const defaultPort = url.protocol === "https:" ? 443 : 80;
+    return { host, port: url.port ? Number(url.port) : defaultPort };
+  } catch {
+    return undefined;
+  }
+}
+
+function checkTcpReachability(endpoint: { host: string; port: number }, timeoutMs = 500): Promise<{ reachable: boolean }> {
+  return new Promise((resolve) => {
+    const socket = new Socket();
+    let settled = false;
+    const finish = (reachable: boolean) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve({ reachable });
+    };
+    socket.setTimeout(timeoutMs);
+    socket.once("connect", () => finish(true));
+    socket.once("timeout", () => finish(false));
+    socket.once("error", () => finish(false));
+    socket.connect(endpoint.port, endpoint.host);
+  });
+}
+
 function missingOpenAiAudioTranscriptionsConfig(env: NodeJS.ProcessEnv): string[] {
   return ["OPENAI_TRANSCRIPTIONS_STT_URL", "OPENAI_TRANSCRIPTIONS_STT_MODEL"].filter((key) => !env[key]);
 }
@@ -373,6 +476,10 @@ function missingGptSovitsConfig(env: NodeJS.ProcessEnv): string[] {
 
 function missingMinimaxTtsConfig(env: NodeJS.ProcessEnv): string[] {
   return ["MINIMAX_API_KEY", "MINIMAX_GROUP_ID", "MINIMAX_TTS_MODEL", "MINIMAX_TTS_VOICE_ID"].filter((key) => !env[key]);
+}
+
+function missingMimoTtsConfig(env: NodeJS.ProcessEnv): string[] {
+  return ["MIMO_API_KEY", "MIMO_TTS_MODEL", "MIMO_TTS_VOICE"].filter((key) => !env[key]);
 }
 
 function requiredEnv(value: string | undefined): string {
@@ -472,6 +579,47 @@ function extractMinimaxAudioBase64(json: Record<string, unknown>): string | unde
   const audio = data?.audio;
   if (typeof audio !== "string" || !audio) return undefined;
   return /^[0-9a-fA-F]+$/.test(audio) ? Buffer.from(audio, "hex").toString("base64") : audio;
+}
+
+function buildMimoTtsPayload(input: VoiceSynthesizeInput, env: NodeJS.ProcessEnv): Record<string, unknown> {
+  const messages: Array<Record<string, string>> = [];
+  if (env.MIMO_TTS_STYLE_PROMPT) {
+    messages.push({
+      role: "user",
+      content: env.MIMO_TTS_STYLE_PROMPT
+    });
+  }
+  messages.push({
+    role: "assistant",
+    content: input.text
+  });
+  return {
+    model: requiredEnv(env.MIMO_TTS_MODEL),
+    messages,
+    stream: false,
+    audio: {
+      voice: input.voice || requiredEnv(env.MIMO_TTS_VOICE),
+      format: env.MIMO_TTS_FORMAT || "mp3"
+    }
+  };
+}
+
+function extractMimoError(json: Record<string, unknown>): string | undefined {
+  const error = json.error as Record<string, unknown> | undefined;
+  if (!error) return undefined;
+  const message = typeof error.message === "string" ? error.message : "MiMo V2.5 TTS returned a provider error.";
+  const code = typeof error.code === "string" || typeof error.code === "number" ? ` ${String(error.code)}` : "";
+  return `MiMo V2.5 TTS provider error${code}: ${message}`;
+}
+
+function extractMimoAudioBase64(json: Record<string, unknown>): string | undefined {
+  const choices = json.choices;
+  if (!Array.isArray(choices)) return undefined;
+  const first = choices[0] as Record<string, unknown> | undefined;
+  const message = first?.message as Record<string, unknown> | undefined;
+  const audio = message?.audio as Record<string, unknown> | undefined;
+  const data = audio?.data;
+  return typeof data === "string" && data ? data : undefined;
 }
 
 function mimeTypeFromAudioFormat(format: string): string {

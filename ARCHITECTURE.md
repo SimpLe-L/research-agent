@@ -336,7 +336,7 @@ Current Phase 1 API surfaces:
 - `POST /api/voice/synthesize`
 - `POST /api/voice/chat`
 
-`packages/speech` currently includes missing-provider degraded adapters, deterministic STT/TTS adapters for local smoke coverage, OpenAI-compatible transcription adapters, local `gpt-sovits-api`, and cloud `minimax-t2a-v2`. These real provider adapters are optional and environment-configured; missing keys, unavailable local services, or paid cloud-provider failures must keep speech in a degraded state without changing the agent runtime.
+`packages/speech` currently includes missing-provider degraded adapters, deterministic STT/TTS adapters for local smoke coverage, OpenAI-compatible transcription adapters, local `gpt-sovits-api`, cloud `minimax-t2a-v2`, and cloud `mimo-v2.5-tts`. These real provider adapters are optional and environment-configured; missing keys, unavailable local services, or paid cloud-provider failures must keep speech in a degraded state without changing the agent runtime.
 
 Supported provider tracks:
 
@@ -348,6 +348,10 @@ Supported provider tracks:
    - TTS uses MiniMax T2A v2 through `minimax-t2a-v2`.
    - STT still uses an OpenAI-compatible transcription endpoint, either local FunASR or another configured service.
    - Use this path when the local machine cannot run GPT-SoVITS reliably.
+3. MiMo cloud TTS stack:
+   - TTS uses Xiaomi MiMo V2.5 through `mimo-v2.5-tts`.
+   - The non-streaming API voice path sends synthesis text as an `assistant` message and optional style guidance as a `user` message, matching MiMo's chat-completions-compatible TTS contract.
+   - STT still uses an OpenAI-compatible transcription endpoint, currently local FunASR/SenseVoice for the Mac M1 Pro development setup.
 
 Self-hosted FunASR + GPT-SoVITS environment:
 
@@ -385,6 +389,22 @@ MINIMAX_TTS_FORMAT=mp3
 MINIMAX_TTS_SAMPLE_RATE=32000
 MINIMAX_TTS_BITRATE=128000
 MINIMAX_TTS_CHANNEL=1
+```
+
+MiMo cloud TTS environment:
+
+```bash
+SPEECH_STT_PROVIDER=openai-audio-transcriptions-stt
+OPENAI_TRANSCRIPTIONS_STT_URL=http://127.0.0.1:8000/v1/audio/transcriptions
+OPENAI_TRANSCRIPTIONS_STT_MODEL=sensevoice
+
+SPEECH_TTS_PROVIDER=mimo-v2.5-tts
+MIMO_TTS_URL=https://api.xiaomimimo.com/v1/chat/completions
+MIMO_API_KEY=
+MIMO_TTS_MODEL=mimo-v2.5-tts
+MIMO_TTS_VOICE=mimo_default
+MIMO_TTS_FORMAT=mp3
+MIMO_TTS_STYLE_PROMPT=温暖自然，语速适中。
 ```
 
 `openai-compatible-stt` remains available only for providers that expose chat-completions audio input instead of `/v1/audio/transcriptions`; it is not the preferred FunASR path.

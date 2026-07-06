@@ -91,6 +91,37 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  if (req.url === "/mimo-tts-ok") {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              audio: {
+                data: Buffer.from("mock-mimo-mp3", "utf8").toString("base64")
+              }
+            }
+          }
+        ]
+      })
+    );
+    return;
+  }
+
+  if (req.url === "/mimo-tts-error") {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify({
+        error: {
+          code: "mock_mimo_error",
+          message: "mock mimo quota exceeded"
+        }
+      })
+    );
+    return;
+  }
+
   res.writeHead(404, { "content-type": "text/plain" });
   res.end("not found");
 });
@@ -227,6 +258,39 @@ try {
   assert(minimaxRequest?.json.voice_setting?.voice_id === "override-voice", "MiniMax TTS should prefer request voice override");
   assert(minimaxRequest?.json.audio_setting?.format === "mp3", "MiniMax TTS should send configured audio format");
 
+  const mimoEnv = {
+    SPEECH_STT_PROVIDER: "deterministic",
+    SPEECH_TTS_PROVIDER: "mimo-v2.5-tts",
+    MIMO_TTS_URL: `${base}/mimo-tts-ok`,
+    MIMO_API_KEY: "mock-mimo-key",
+    MIMO_TTS_MODEL: "mimo-v2.5-tts",
+    MIMO_TTS_VOICE: "mock-mimo-voice",
+    MIMO_TTS_FORMAT: "mp3",
+    MIMO_TTS_STYLE_PROMPT: "温暖自然，语速适中。"
+  };
+  const mimoStatus = await getSpeechStatus(mimoEnv);
+  assert(mimoStatus.tts.name === "mimo-v2.5-tts", "expected mimo-v2.5-tts status");
+  assert(mimoStatus.tts.reachable === true, "MiMo TTS should be ready when env is complete");
+  const mimoAudio = await synthesizeVoice(
+    {
+      text: "这是 MiMo 语音 provider smoke。",
+      voice: "override-mimo-voice"
+    },
+    mimoEnv
+  );
+  assert(mimoAudio.provider === "mimo-v2.5-tts", "MiMo TTS provider id should be returned");
+  assert(mimoAudio.mimeType === "audio/mpeg", "MiMo TTS should infer mp3 mime type");
+  assert(Buffer.from(mimoAudio.audioBase64 ?? "", "base64").toString("utf8") === "mock-mimo-mp3", "MiMo TTS should return base64 audio");
+  const mimoRequest = requests.find((request) => request.url === "/mimo-tts-ok");
+  assert(mimoRequest?.method === "POST", "MiMo TTS should use POST");
+  assert(mimoRequest?.json.model === "mimo-v2.5-tts", "MiMo TTS should send configured model");
+  assert(mimoRequest?.json.messages?.[0]?.role === "user", "MiMo TTS should send optional user style prompt");
+  assert(mimoRequest?.json.messages?.[1]?.role === "assistant", "MiMo TTS should send assistant message text");
+  assert(mimoRequest?.json.messages?.[1]?.content === "这是 MiMo 语音 provider smoke。", "MiMo TTS should send text in assistant message");
+  assert(mimoRequest?.json.audio?.voice === "override-mimo-voice", "MiMo TTS should prefer request voice override");
+  assert(mimoRequest?.json.audio?.format === "mp3", "MiMo TTS should send configured audio format");
+  assert(mimoRequest?.json.stream === false, "MiMo TTS should use non-streaming response for API voice path");
+
   const emptyTranscript = await transcribeVoice(
     {
       audioBase64: Buffer.from("fake webm audio").toString("base64"),
@@ -261,6 +325,17 @@ try {
   );
   assert(minimaxProviderError.degradedReason?.includes("provider error 1008"), "MiniMax provider error should degrade with status code");
 
+  const mimoProviderError = await synthesizeVoice(
+    {
+      text: "MiMo 失败路径"
+    },
+    {
+      ...mimoEnv,
+      MIMO_TTS_URL: `${base}/mimo-tts-error`
+    }
+  );
+  assert(mimoProviderError.degradedReason?.includes("mock_mimo_error"), "MiMo provider error should degrade with provider error code");
+
   console.log(
     JSON.stringify(
       {
@@ -269,7 +344,8 @@ try {
         sttTranscript: transcript.transcript,
         transcriptionsTranscript: transcriptionsTranscript.transcript,
         ttsMimeType: audio.mimeType,
-        minimaxTtsMimeType: minimaxAudio.mimeType
+        minimaxTtsMimeType: minimaxAudio.mimeType,
+        mimoTtsMimeType: mimoAudio.mimeType
       },
       null,
       2
