@@ -95,7 +95,7 @@ export class AgentShellService {
       metadata
     });
     const memoryContext = await this.memoryService
-      .search({
+      .retrieveForAgent({
         query: input.content,
         sessionId: session.id,
         limit: 5

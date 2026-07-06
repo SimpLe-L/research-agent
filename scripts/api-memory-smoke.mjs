@@ -16,6 +16,8 @@ try {
         ...process.env,
         PORT: String(port),
         SP_AGENT_DATA_DIR: dataDir,
+        MEMORY_VECTOR_PROVIDER: "lancedb",
+        MEMORY_LANCEDB_URI: join(dataDir, "lancedb"),
         SILICONFLOW_API_KEY: ""
       },
       stdio: ["ignore", "pipe", "pipe"]
@@ -31,6 +33,7 @@ try {
 
   const created = await post(`${baseUrl}/memory/candidates`, {
     content: "用户偏好本地优先的个人助手架构。",
+    kind: "core",
     scope: "session",
     sessionId: session.id,
     source: { type: "user", id: session.id, label: "memory smoke" },
@@ -39,6 +42,8 @@ try {
     tags: ["preference", "architecture"]
   });
   assert(created.accepted === true, "memory candidate should be accepted");
+  assert(created.memory.kind === "core", "memory candidate should preserve kind");
+  assert(created.memory.sensitivity === "normal", "memory candidate should default to normal sensitivity");
   assert(created.memory.status === "candidate", "memory candidate should start as candidate");
 
   const search = await get(`${baseUrl}/memory/search?query=${encodeURIComponent("本地优先 助手")}&sessionId=${session.id}`);
@@ -50,6 +55,53 @@ try {
     reason: "smoke accepted durable fact"
   });
   assert(promoted.memory.status === "active", "promoted memory should become active");
+
+  const journal = await post(`${baseUrl}/memory/candidates`, {
+    content: "昨天下午我们用语音讨论了 Memory v2 的 journal 时间检索。",
+    kind: "journal",
+    scope: "session",
+    sessionId: session.id,
+    source: { type: "voice", id: session.id, label: "voice transcript" },
+    provenance: { source: "voice", sttProvider: "deterministic", audioPersisted: false },
+    confidence: 0.75,
+    occurredAt: "2026-07-05T08:30:00.000Z",
+    tags: ["voice", "journal", "memory"]
+  });
+  await post(`${baseUrl}/memory/${journal.memoryId}/promote`, {
+    reason: "smoke accepted voice journal event"
+  });
+  const temporalSearch = await get(
+    `${baseUrl}/memory/search?query=${encodeURIComponent("昨天")}&kind=journal&from=${encodeURIComponent("2026-07-05T00:00:00.000Z")}&to=${encodeURIComponent("2026-07-05T23:59:59.999Z")}&sessionId=${encodeURIComponent(session.id)}`
+  );
+  assert(temporalSearch.memories.length === 1, "temporal journal search should find the journal entry");
+  assert(temporalSearch.memories[0].rankingSignals.includes("temporal_window"), "temporal journal search should expose temporal window signal");
+  assert(temporalSearch.memories[0].rankingSignals.includes("journal_temporal"), "temporal journal search should use journal temporal ranking");
+
+  const coreOnlySearch = await get(`${baseUrl}/memory/search?query=${encodeURIComponent("本地优先")}&strategy=core_semantic&sessionId=${encodeURIComponent(session.id)}`);
+  assert(coreOnlySearch.memories.length >= 1, "core semantic search should find core memories");
+  assert(coreOnlySearch.memories.every((item) => item.entry.kind !== "journal"), "core semantic search should exclude journal memories");
+  assert(coreOnlySearch.memories.some((item) => item.rankingSignals.includes("vector_match")), "core semantic search should use vector ranking when LanceDB is enabled");
+
+  const hybridSearch = await get(`${baseUrl}/memory/search?query=${encodeURIComponent("Memory v2 本地优先")}&strategy=hybrid&sessionId=${encodeURIComponent(session.id)}&limit=5`);
+  assert(hybridSearch.memories.some((item) => item.entry.kind === "core"), "hybrid search should include core memories");
+  assert(hybridSearch.memories.some((item) => item.entry.kind === "journal"), "hybrid search should include journal memories");
+  assert(hybridSearch.memories.some((item) => item.rankingSignals.includes("vector_match")), "hybrid search should use vector ranking when LanceDB is enabled");
+
+  const sensitive = await post(`${baseUrl}/memory/candidates`, {
+    content: "用户的敏感测试代号是 SECRETUNIQUEV2。",
+    kind: "core",
+    source: { type: "user", id: session.id, label: "sensitivity smoke" },
+    sensitivity: "sensitive",
+    confidence: 0.95,
+    tags: ["sensitive"]
+  });
+  await post(`${baseUrl}/memory/${sensitive.memoryId}/promote`, {
+    reason: "smoke accepted sensitive fact for retrieval gate test"
+  });
+  const hiddenSensitive = await get(`${baseUrl}/memory/search?query=${encodeURIComponent("SECRETUNIQUEV2")}`);
+  assert(hiddenSensitive.memories.length === 0, "sensitive memory should be excluded by default");
+  const visibleSensitive = await get(`${baseUrl}/memory/search?query=${encodeURIComponent("SECRETUNIQUEV2")}&includeSensitive=true`);
+  assert(visibleSensitive.memories.length === 1, "explicit includeSensitive should allow sensitive memory search");
 
   const conflicting = await post(`${baseUrl}/memory/candidates`, {
     content: "用户偏好本地优先的个人助手架构。",
@@ -102,6 +154,8 @@ try {
   });
   assert(Array.isArray(agentTurn.memoryContext), "agent turn should expose memory context");
   assert(agentTurn.memoryContext.length >= 1, "agent turn should retrieve relevant memory context");
+  assert(agentTurn.memoryContext.every((item) => item.entry.status === "active"), "agent retrieval gate should only expose active memories");
+  assert(agentTurn.memoryContext.every((item) => item.entry.sensitivity !== "sensitive"), "agent retrieval gate should exclude sensitive memories");
 
   const writeAudit = await post(`${baseUrl}/extensions/local.memory/invoke`, {
     capabilityId: "memory.write_candidate",

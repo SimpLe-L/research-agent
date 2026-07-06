@@ -1,10 +1,13 @@
-import { Injectable } from "@nestjs/common";
+import { Inject, Injectable } from "@nestjs/common";
 import { getAgentRuntimeStatus } from "@sp-agent/agent-runtime";
 import { getSpeechStatus } from "@sp-agent/speech";
 import type { AppSettings, ProviderReadinessItem } from "@sp-agent/shared";
+import { MemoryVectorService } from "./memory-vector.service.js";
 
 @Injectable()
 export class SettingsService {
+  constructor(@Inject(MemoryVectorService) private readonly memoryVectorService: MemoryVectorService) {}
+
   private settings: AppSettings = {
     llmProvider: "pi",
     model: process.env.PI_MODEL_ID || process.env.PI_SILICONFLOW_MODEL || "deepseek-ai/DeepSeek-V4-Flash",
@@ -18,6 +21,7 @@ export class SettingsService {
   async readiness(): Promise<{ items: ProviderReadinessItem[] }> {
     const piRuntime = await getAgentRuntimeStatus(process.env);
     const speech = await getSpeechStatus(process.env);
+    const memoryVector = this.memoryVectorService.getStatus();
     return {
       items: [
         {
@@ -58,6 +62,36 @@ export class SettingsService {
           envVars: ["SP_AGENT_DATA_DIR"],
           action: "Run pnpm smoke:api:memory after memory contract or storage changes.",
           docsHint: "Memory is persisted as local JSON in SP_AGENT_DATA_DIR or .sp-agent-data by default."
+        },
+        {
+          id: "memory-vector-index",
+          label: "Memory vector index",
+          status: memoryVector.enabled ? readinessStatus(memoryVector.embedding.configured, memoryVector.embedding.reachable) : "manual",
+          capability: "Optional LanceDB retrieval accelerator using deterministic or SiliconFlow BGE-M3 embeddings",
+          envVars: [
+            "MEMORY_VECTOR_PROVIDER",
+            "MEMORY_LANCEDB_URI",
+            "MEMORY_EMBEDDING_PROVIDER",
+            "SILICONFLOW_BASE_URL",
+            "SILICONFLOW_API_KEY",
+            "SILICONFLOW_EMBEDDING_MODEL",
+            "MEMORY_EMBEDDING_TIMEOUT_MS"
+          ],
+          envTemplate: [
+            "MEMORY_VECTOR_PROVIDER=lancedb",
+            "MEMORY_LANCEDB_URI=.sp-agent-data/lancedb",
+            "# Leave unset to use SiliconFlow automatically when SILICONFLOW_API_KEY is present.",
+            "MEMORY_EMBEDDING_PROVIDER=siliconflow",
+            "SILICONFLOW_BASE_URL=https://api.siliconflow.cn/v1",
+            "SILICONFLOW_EMBEDDING_MODEL=BAAI/bge-m3",
+            "SILICONFLOW_API_KEY="
+          ].join("\n"),
+          action: memoryVector.enabled
+            ? "Run pnpm smoke:api:memory after memory vector or embedding provider changes."
+            : "Set MEMORY_VECTOR_PROVIDER=lancedb to enable vector-backed memory reranking.",
+          docsHint: memoryVector.enabled
+            ? memoryVector.embedding.degradedReason ?? `Current memory embedding provider: ${memoryVector.embedding.name}.`
+            : "Vector search is optional; JSON-backed lexical/temporal memory search remains available when disabled."
         },
         {
           id: "speech-stt",

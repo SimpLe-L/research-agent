@@ -40,7 +40,7 @@ const coreAgentShell: ExtensionManifest = {
 const memorySkill: ExtensionManifest = {
   id: "local.memory",
   name: "Local Memory",
-  description: "App-owned long-term memory layer for durable facts, provenance, search, and tombstone-based forgetting.",
+  description: "App-owned Memory v2 layer for core facts, journal events, summaries, provenance, search, audit, and tombstone-based forgetting.",
   kind: "skill",
   phase: "phase-3",
   status: "active",
@@ -49,7 +49,7 @@ const memorySkill: ExtensionManifest = {
     {
       id: "memory.search",
       label: "Search memory",
-      description: "Search durable app-owned memory with scope, session, and limit filters.",
+      description: "Search durable app-owned memory with kind, scope, session, time range, sensitivity, status, and limit filters.",
       permissions: ["memory:read"],
       inputSchema: "searchMemorySchema",
       outputSchema: "{ memories: memorySearchResult[] }"
@@ -57,7 +57,7 @@ const memorySkill: ExtensionManifest = {
     {
       id: "memory.write_candidate",
       label: "Write memory candidate",
-      description: "Create an auditable memory candidate with source and provenance metadata.",
+      description: "Create an auditable Memory v2 candidate with kind, source, provenance, sensitivity, and optional occurredAt metadata.",
       permissions: ["memory:write_candidate"],
       inputSchema: "createMemoryCandidateSchema",
       outputSchema: "{ accepted: boolean, memoryId: string, memory: memoryEntry }"

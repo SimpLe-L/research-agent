@@ -277,12 +277,13 @@ Do not let LangGraph become a second unrestricted control plane. It should not b
 
 Long-term memory must be app-owned, not runtime-owned. Runtime sessions are short-term context; durable memory belongs in the API/data layer.
 
-Memory types:
+Memory v2 kinds:
 
-- `session`: current thread messages and short summaries.
-- `episodic`: historical conversations, tasks, and important events.
-- `semantic`: stable facts, user preferences, project knowledge, and reusable notes.
+- `core`: stable facts, user preferences, identity facts, and durable relationship/project context.
+- `journal`: time-addressable conversation events, including voice transcript-derived events when policy allows candidate creation.
+- `summary`: compressed session or time-window context.
 - `procedural`: reusable workflows, skill preferences, and operating habits.
+- `project`: project facts and architecture decisions.
 - `audit`: provenance, timestamps, source links, and why a memory was written or changed.
 
 Target memory tools:
@@ -300,15 +301,17 @@ Current implementation:
 
 - Chat sessions persist to PostgreSQL tables `chat_sessions` and `chat_messages` when `DATABASE_URL` is configured. The API keeps a local `chat.json` fallback under `SP_AGENT_DATA_DIR` or `.sp-agent-data` only when PostgreSQL is unavailable.
 - Memory entries persist to `memory.json` under `SP_AGENT_DATA_DIR` or `.sp-agent-data`.
+- Memory entries include `kind`, `sensitivity`, and optional `occurredAt` fields. `occurredAt` enables journal-style temporal retrieval such as "yesterday" or explicit date-window queries without relying only on vector similarity.
 - `memory.search` is read-only and can be exposed to agent tool calls.
 - `memory.write_candidate` creates candidate entries and audit events but is classified as `write_or_provider`, so agent auto-tool calls cannot invoke it without approval.
 - `memory.promote_fact`, `memory.update`, and `memory.merge` are implemented through the API service and registered on `local.memory`; extension invocation requires approval.
 - Memory candidate creation detects potential source/content conflicts against existing non-tombstoned memories. Conflicting candidates record `conflictsWith`, `conflictGroupId`, `conflictReason`, and a `conflict_detected` audit event.
 - `memory.merge` tombstones superseded memories and records `conflict_resolved` when it resolves a conflict set.
-- Memory search returns matched terms and ranking signals. Ranking weighs exact phrase matches, term frequency, tags, source labels, accepted-vs-candidate status, confidence, and recency.
+- Memory search returns matched terms and ranking signals through an explicit retrieval strategy layer. `core_semantic` searches stable `core`, `project`, and `procedural` memories; `journal_temporal` first narrows `journal` and `summary` memories by `occurredAt`/time range, then ranks relevance; `hybrid` combines both paths with kind quotas for agent context.
+- `MEMORY_VECTOR_PROVIDER=lancedb` enables an optional local LanceDB index under `MEMORY_LANCEDB_URI` or `SP_AGENT_DATA_DIR/lancedb`. LanceDB is used as a retrieval accelerator/reranker behind the Memory v2 contract; `memory.json` remains the source of truth for lifecycle, audit, provenance, approval, and tombstones. Memory embeddings default to SiliconFlow `BAAI/bge-m3` when `SILICONFLOW_API_KEY` is configured, or deterministic local embeddings when no key is present; `MEMORY_EMBEDDING_PROVIDER=deterministic|siliconflow` can force either path. Vector tables are partitioned by embedding provider, model, and dimension so local smoke indexes do not collide with BGE-M3 indexes.
 - Memory audit events record candidate creation, promotion, update, merge, forgetting, conflict detection, and conflict resolution.
 - Forgetting is tombstone-based through `DELETE /api/memory/:id`; tombstoned memories do not appear in search.
-- `POST /api/agent/messages` performs deterministic read-only memory retrieval before calling the runtime and returns the selected `memoryContext`.
+- `POST /api/agent/messages` performs deterministic read-only memory retrieval before calling the runtime and returns the selected `memoryContext`. The agent retrieval gate only injects active, non-sensitive memory by default; candidates remain reviewable/searchable without becoming hidden prompt state.
 
 ## Skill Task Model
 

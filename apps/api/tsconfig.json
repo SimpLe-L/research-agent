@@ -20,7 +20,9 @@
     "src/modules/health.controller.ts",
     "src/modules/local-json-store.service.ts",
     "src/modules/memory.controller.ts",
+    "src/modules/memory-embedding.service.ts",
     "src/modules/memory.service.ts",
+    "src/modules/memory-vector.service.ts",
     "src/modules/providers.controller.ts",
     "src/modules/settings.controller.ts",
     "src/modules/settings.service.ts"

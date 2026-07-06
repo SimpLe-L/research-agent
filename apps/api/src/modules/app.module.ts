@@ -10,7 +10,9 @@ import { ExtensionsService } from "./extensions.service.js";
 import { HealthController } from "./health.controller.js";
 import { LocalJsonStore } from "./local-json-store.service.js";
 import { MemoryController } from "./memory.controller.js";
+import { MemoryEmbeddingService } from "./memory-embedding.service.js";
 import { MemoryService } from "./memory.service.js";
+import { MemoryVectorService } from "./memory-vector.service.js";
 import { ProvidersController } from "./providers.controller.js";
 import { SettingsController } from "./settings.controller.js";
 import { SettingsService } from "./settings.service.js";
@@ -38,6 +40,8 @@ import { WorkflowsService } from "./workflows.service.js";
     SettingsService,
     ChatService,
     MemoryService,
+    MemoryEmbeddingService,
+    MemoryVectorService,
     AgentShellService,
     ExtensionsService,
     ApprovalsService,

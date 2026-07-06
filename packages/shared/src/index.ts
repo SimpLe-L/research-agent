@@ -69,8 +69,14 @@ export type CreateChatMessageInput = z.infer<typeof createChatMessageSchema>;
 export const memoryScopeSchema = z.enum(["global", "session"]);
 export type MemoryScope = z.infer<typeof memoryScopeSchema>;
 
+export const memoryKindSchema = z.enum(["core", "journal", "summary", "procedural", "project"]);
+export type MemoryKind = z.infer<typeof memoryKindSchema>;
+
+export const memorySensitivitySchema = z.enum(["normal", "sensitive"]);
+export type MemorySensitivity = z.infer<typeof memorySensitivitySchema>;
+
 export const memorySourceSchema = z.object({
-  type: z.enum(["user", "assistant", "import", "system"]),
+  type: z.enum(["user", "assistant", "import", "system", "voice"]),
   id: z.string().optional(),
   label: z.string().optional()
 });
@@ -78,18 +84,21 @@ export type MemorySource = z.infer<typeof memorySourceSchema>;
 
 export const memoryEntrySchema = z.object({
   id: z.string(),
+  kind: memoryKindSchema.default("core"),
   scope: memoryScopeSchema.default("global"),
   sessionId: z.string().optional(),
   content: z.string(),
   source: memorySourceSchema,
   provenance: z.record(z.unknown()).default({}),
   confidence: z.number().min(0).max(1).default(0.7),
+  sensitivity: memorySensitivitySchema.default("normal"),
   tags: z.array(z.string()).default([]),
   status: z.enum(["candidate", "active", "tombstoned"]).default("candidate"),
   supersedes: z.array(z.string()).default([]),
   conflictsWith: z.array(z.string()).default([]),
   conflictGroupId: z.string().optional(),
   conflictReason: z.string().optional(),
+  occurredAt: z.string().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
   promotedAt: z.string().optional(),
@@ -99,19 +108,31 @@ export type MemoryEntry = z.infer<typeof memoryEntrySchema>;
 
 export const createMemoryCandidateSchema = z.object({
   content: z.string().min(1),
+  kind: memoryKindSchema.default("core"),
   scope: memoryScopeSchema.default("global"),
   sessionId: z.string().optional(),
   source: memorySourceSchema.default({ type: "user" }),
   provenance: z.record(z.unknown()).default({}),
   confidence: z.number().min(0).max(1).default(0.7),
+  sensitivity: memorySensitivitySchema.default("normal"),
+  occurredAt: z.string().optional(),
   tags: z.array(z.string()).default([])
 });
 export type CreateMemoryCandidateInput = z.infer<typeof createMemoryCandidateSchema>;
 
 export const searchMemorySchema = z.object({
   query: z.string().min(1),
+  strategy: z.enum(["auto", "core_semantic", "journal_temporal", "hybrid"]).default("auto"),
+  kind: memoryKindSchema.optional(),
   scope: memoryScopeSchema.optional(),
   sessionId: z.string().optional(),
+  from: z.string().optional(),
+  to: z.string().optional(),
+  includeSensitive: z.coerce.boolean().default(false),
+  statuses: z.preprocess(
+    (value) => typeof value === "string" ? value.split(",").map((item) => item.trim()).filter(Boolean) : value,
+    z.array(z.enum(["candidate", "active", "tombstoned"])).optional()
+  ),
   limit: z.coerce.number().int().positive().max(50).default(10)
 });
 export type SearchMemoryInput = z.infer<typeof searchMemorySchema>;
@@ -126,9 +147,12 @@ export type MemorySearchResult = z.infer<typeof memorySearchResultSchema>;
 
 export const updateMemorySchema = z.object({
   content: z.string().min(1).optional(),
+  kind: memoryKindSchema.optional(),
   confidence: z.number().min(0).max(1).optional(),
+  sensitivity: memorySensitivitySchema.optional(),
   tags: z.array(z.string()).optional(),
-  provenance: z.record(z.unknown()).optional()
+  provenance: z.record(z.unknown()).optional(),
+  occurredAt: z.string().optional()
 });
 export type UpdateMemoryInput = z.infer<typeof updateMemorySchema>;
 
@@ -140,8 +164,11 @@ export type PromoteMemoryInput = z.infer<typeof promoteMemorySchema>;
 export const mergeMemorySchema = z.object({
   sourceIds: z.array(z.string()).min(1),
   content: z.string().min(1),
+  kind: memoryKindSchema.default("core"),
   reason: z.string().min(1).default("Merged related memories."),
   confidence: z.number().min(0).max(1).default(0.8),
+  sensitivity: memorySensitivitySchema.default("normal"),
+  occurredAt: z.string().optional(),
   tags: z.array(z.string()).default([])
 });
 export type MergeMemoryInput = z.infer<typeof mergeMemorySchema>;

@@ -16,6 +16,7 @@
     "smoke:api:extensions": "node scripts/api-extensions-smoke.mjs",
     "smoke:api:memory": "node scripts/api-memory-smoke.mjs",
     "smoke:api:workflows": "node scripts/api-workflows-smoke.mjs",
+    "smoke:api:memory-embedding-live": "node scripts/memory-embedding-live-smoke.mjs",
     "smoke:api:speech": "node scripts/api-speech-smoke.mjs",
     "smoke:speech:providers": "node scripts/speech-provider-smoke.mjs",
     "smoke:speech:live": "node scripts/speech-live-smoke.mjs",

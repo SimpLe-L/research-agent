@@ -132,6 +132,9 @@ Complete when:
 - `pnpm smoke:speech:providers` verifies OpenAI audio transcriptions STT, legacy `openai-compatible-stt`, `gpt-sovits-api`, and `minimax-t2a-v2` against local mock HTTP providers, including request payloads, response parsing, binary audio handling, and degraded HTTP/provider-error/empty-response paths.
 - `pnpm smoke:speech:live` is available for explicit live provider checks. It skips by default and only calls configured real STT/TTS providers when `SPEECH_PROVIDER_LIVE_SMOKE=1` is set.
 - Speech provider setup is documented in `ARCHITECTURE.md`: either self-host FunASR STT plus GPT-SoVITS TTS, or use MiniMax cloud TTS with an OpenAI-compatible transcription endpoint.
+- Memory v2 is now the next active memory direction. It keeps memory API-owned and auditable while adding typed memory kinds inspired by voice-chat systems such as MoeChat: `core` for durable preferences/facts, `journal` for time-addressable conversation events, `summary` for compressed session/time-window context, `procedural` for reusable working habits, and `project` for project facts.
+- Memory v2 should add temporal search, retrieval gating, and an explicit retrieval strategy layer before expanding into embeddings or external memory frameworks. `mem0`-style engines may be introduced later only as memory extraction/retrieval adapters behind the app-owned schema, approval, provenance, and audit model.
+- LanceDB is the first optional Memory v2 vector backend. Keep it local-first under `MEMORY_LANCEDB_URI` or `SP_AGENT_DATA_DIR/lancedb`; SiliconFlow `BAAI/bge-m3` is the first real embedding provider, with deterministic embeddings retained for smoke/offline development when no `SILICONFLOW_API_KEY` is configured or `MEMORY_EMBEDDING_PROVIDER=deterministic` is set.
 
 ## Current Gaps
 
@@ -139,7 +142,8 @@ Complete when:
 2. Workflow runner remains local-JSON backed and in-process for execution; it now has async start and stale recovery, but durable cross-process workers are still future hardening.
 3. Connector boundary is implemented with `local.bookmarks`; additional real personal-service connectors still need per-connector permission and audit design.
 4. `local-deterministic` proves a second adapter path, but additional live provider adapters should wait for a real provider/use case.
-5. Speech Phase 1 half-duplex shell is implemented with deterministic providers, renderer recording/playback UI, FunASR-compatible transcription, local GPT-SoVITS TTS, cloud MiniMax TTS, settings readiness, and voice audit events; live provider validation and settings UI remain.
+5. Memory v2 review UI is not implemented yet. The backend now exposes typed memory kinds, temporal search, provenance, sensitivity, retrieval gating, strategy selection, optional LanceDB vector reranking, and smoke coverage; the renderer can add a compact memory review surface for search, edit, merge, promote, and forget.
+6. Speech Phase 1 half-duplex shell is implemented with deterministic providers, renderer recording/playback UI, FunASR-compatible transcription, local GPT-SoVITS TTS, cloud MiniMax TTS, settings readiness, and voice audit events; live provider validation and settings UI remain.
 
 ## OpenClaw-Style Optimization Direction
 
@@ -233,7 +237,7 @@ Latest verification:
 
 ### Phase 3: Memory Layer
 
-Status: verified hardened implementation; future work is deeper ranking/evaluation only if daily usage shows gaps.
+Status: Memory v2 backend verified; review UI and optional external memory-engine adapters remain future work.
 
 Deliverables:
 
@@ -246,13 +250,23 @@ Deliverables:
 - Route write/provider memory extension calls through approval queue. Done.
 - Add source-conflict detection and merge-based conflict resolution audit. Done.
 - Add stronger ranking with exact phrase, term frequency, tag/source/status/confidence/recency signals. Done.
+- Add Memory v2 typed kinds (`core`, `journal`, `summary`, `procedural`, `project`) while preserving existing `candidate`, `active`, and `tombstoned` lifecycle. Done.
+- Add `occurredAt` for time-addressable journal/event memory and query filters for `kind`, `from`, `to`, and `includeSensitive`. Done.
+- Add `sensitivity` metadata and retrieval gating so agent turns receive only active, relevant, non-sensitive memory by default. Done.
+- Add retrieval strategies (`auto`, `core_semantic`, `journal_temporal`, `hybrid`) so journal search first narrows by time before relevance ranking, while agent retrieval uses hybrid kind quotas. Done.
+- Add optional LanceDB vector indexing and provider-backed reranking behind the retrieval strategy layer. Done with deterministic offline embeddings and SiliconFlow `BAAI/bge-m3` embeddings.
+- Preserve voice provenance (`source: voice`, `sttProvider`, `audioPersisted: false`) for memory candidates created from speech transcripts. Planned.
+- Keep external memory engines such as mem0 out of the control plane. They may later implement candidate extraction, consolidation, or semantic retrieval behind the Memory v2 service contract. Planned.
 
 Acceptance:
 
 - `pnpm smoke:api:memory`
+- `MEMORY_EMBEDDING_LIVE_SMOKE=1 pnpm smoke:api:memory-embedding-live` when validating real SiliconFlow `BAAI/bge-m3` embeddings with `.env` credentials.
 - Agent turn can retrieve memory without directly mutating it. Done for deterministic pre-prompt retrieval; mutation remains outside auto tool access.
 - Extension memory writes require approval and can complete after approval. Done.
 - Conflict detection, conflict resolution audit, matched terms, and ranking signals are covered by `pnpm smoke:api:memory`.
+- Memory v2 search covers semantic/term core retrieval, temporal journal retrieval, and hybrid retrieval with kind quotas.
+- Agent retrieval gate excludes candidates and sensitive memories by default while keeping explicit memory search able to include them when requested.
 
 ### Phase 4: Skill And Workflow Layer
 
