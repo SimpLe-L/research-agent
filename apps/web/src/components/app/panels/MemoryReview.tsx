@@ -8,7 +8,7 @@ import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { apiBase, fetchJson } from "@/app/api";
-import type { MemoryAuditEvent, MemoryConsolidationSuggestion, MemoryEntry, MemoryKind, MemorySearchResult, MemoryStatus, MemoryUpdatePayload } from "@/app/types";
+import type { ExtensionInvocationResponse, MemoryAuditEvent, MemoryConsolidationSuggestion, MemoryEntry, MemoryKind, MemorySearchResult, MemoryStatus, MemoryUpdatePayload } from "@/app/types";
 import { cn } from "@/lib/utils";
 
 const memoryKindLabels: Record<MemoryKind, string> = {
@@ -108,33 +108,47 @@ export function MemoryReview() {
     if (open) void refreshMemories();
   }, [open]);
 
+  useEffect(() => {
+    function handleApprovalExecuted() {
+      if (open) void refreshMemories();
+    }
+    window.addEventListener("sp-agent:approval-executed", handleApprovalExecuted);
+    return () => window.removeEventListener("sp-agent:approval-executed", handleApprovalExecuted);
+  }, [open]);
+
   async function promote(memory: MemoryEntry) {
-    setStatus("Promoting memory");
+    setStatus("Requesting promotion approval");
     try {
-      await fetchJson<{ memory: MemoryEntry }>(`${apiBase}/memory/${memory.id}/promote`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ reason: "Promoted from memory review UI." })
+      const response = await invokeMemoryExtension("memory.promote_fact", {
+        id: memory.id,
+        reason: "Promoted from memory review UI."
       });
-      await refreshMemories();
-      setStatus("Promoted");
+      if (response.status === "completed") {
+        await refreshMemories();
+        setStatus("Promoted");
+      } else {
+        setStatus("Promotion approval requested");
+      }
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Promote failed");
+      setStatus(error instanceof Error ? error.message : "Promote approval failed");
     }
   }
 
   async function updateMemory(memory: MemoryEntry, payload: MemoryUpdatePayload) {
-    setStatus("Updating memory");
+    setStatus("Requesting update approval");
     try {
-      await fetchJson<{ memory: MemoryEntry }>(`${apiBase}/memory/${memory.id}`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(payload)
+      const response = await invokeMemoryExtension("memory.update", {
+        id: memory.id,
+        ...payload
       });
-      await refreshMemories();
-      setStatus("Updated");
+      if (response.status === "completed") {
+        await refreshMemories();
+        setStatus("Updated");
+      } else {
+        setStatus("Update approval requested");
+      }
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Update failed");
+      setStatus(error instanceof Error ? error.message : "Update approval failed");
     }
   }
 
@@ -151,28 +165,28 @@ export function MemoryReview() {
 
   async function mergeSelected() {
     if (!mergeDraft || selectedMemories.length < 2) return;
-    setStatus("Merging memories");
+    setStatus("Requesting merge approval");
     try {
-      await fetchJson<{ memory: MemoryEntry }>(`${apiBase}/memory/merge`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          sourceIds: selectedMemories.map((memory) => memory.id),
-          content: mergeDraft.content,
-          kind: mergeDraft.kind,
-          reason: "Merged from memory review UI.",
-          confidence: 0.8,
-          sensitivity: mergeDraft.sensitivity,
-          occurredAt: mergeDraft.occurredAt,
-          tags: mergeDraft.tags
-        })
+      const response = await invokeMemoryExtension("memory.merge", {
+        sourceIds: selectedMemories.map((memory) => memory.id),
+        content: mergeDraft.content,
+        kind: mergeDraft.kind,
+        reason: "Merged from memory review UI.",
+        confidence: 0.8,
+        sensitivity: mergeDraft.sensitivity,
+        occurredAt: mergeDraft.occurredAt,
+        tags: mergeDraft.tags
       });
-      setSelectedIds(new Set());
-      setMergeDraft(null);
-      await refreshMemories();
-      setStatus("Merged");
+      if (response.status === "completed") {
+        setSelectedIds(new Set());
+        setMergeDraft(null);
+        await refreshMemories();
+        setStatus("Merged");
+      } else {
+        setStatus("Merge approval requested");
+      }
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Merge failed");
+      setStatus(error instanceof Error ? error.message : "Merge approval failed");
     }
   }
 
@@ -697,4 +711,19 @@ function parseTags(value: string) {
     .split(",")
     .map((tag) => tag.trim())
     .filter(Boolean);
+}
+
+async function invokeMemoryExtension(capabilityId: string, input: Record<string, unknown>) {
+  const response = await fetchJson<ExtensionInvocationResponse>(`${apiBase}/extensions/local.memory/invoke`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ capabilityId, input })
+  });
+  if (response.status === "degraded") {
+    throw new Error(response.degradedReason ?? `${capabilityId} is degraded`);
+  }
+  if (response.status === "pending_approval") {
+    window.dispatchEvent(new CustomEvent("sp-agent:approval-requested", { detail: response.approval }));
+  }
+  return response;
 }

@@ -107,6 +107,51 @@ export type ApprovalRequest = {
   decidedAt?: string;
 };
 
+export type ExtensionInvocationResponse = {
+  extensionId: string;
+  capabilityId: string;
+  permissionAudit: {
+    extensionId: string;
+    capabilityId: string;
+    permissions: string[];
+    allowed: boolean;
+    mode: "read_only" | "write_or_provider";
+    reason: string;
+  };
+  status: "completed" | "degraded" | "pending_approval";
+  result: unknown;
+  degradedReason?: string;
+  approval?: ApprovalRequest;
+};
+
+export type WorkflowNodeEvent = {
+  id: string;
+  nodeId: string;
+  label: string;
+  status: "pending" | "running" | "completed" | "failed" | "cancelled";
+  payload: Record<string, unknown>;
+  error?: string;
+  degradedReason?: string;
+  startedAt?: string;
+  completedAt?: string;
+  createdAt: string;
+};
+
+export type WorkflowRun = {
+  id: string;
+  kind: string;
+  status: "pending" | "running" | "completed" | "failed" | "cancelled";
+  input: Record<string, unknown>;
+  result?: unknown;
+  degradedReason?: string;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  nodeEvents: WorkflowNodeEvent[];
+};
+
 export type MemoryKind = "core" | "journal" | "summary" | "procedural" | "project";
 export type MemoryStatus = "candidate" | "active" | "tombstoned";
 

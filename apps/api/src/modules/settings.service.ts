@@ -55,7 +55,7 @@ export class SettingsService {
             "PI_WORKING_DIR="
           ].join("\n"),
           action: piRuntime.reachable
-            ? "Run pnpm smoke:agent-runtime:pi after runtime changes; use PI_LIVE_SMOKE=1 with real credentials for a live model call."
+            ? "Run pnpm smoke:runtime after runtime adapter changes."
             : "Fill SILICONFLOW_API_KEY, then restart the API.",
           docsHint: piRuntime.degradedReason
         },
@@ -65,7 +65,7 @@ export class SettingsService {
           status: "ready",
           capability: "App-owned memory search, write candidates, update, and forget",
           envVars: ["SP_AGENT_DATA_DIR"],
-          action: "Run pnpm smoke:api:memory after memory contract or storage changes.",
+          action: "Run pnpm smoke:memory after memory contract or storage changes.",
           docsHint: "Memory is persisted as local JSON in SP_AGENT_DATA_DIR or .sp-agent-data by default."
         },
         {
@@ -92,7 +92,7 @@ export class SettingsService {
             "SILICONFLOW_API_KEY="
           ].join("\n"),
           action: memoryVector.enabled
-            ? "Run pnpm smoke:api:memory after memory vector or embedding provider changes."
+            ? "Run pnpm smoke:memory after memory vector or embedding provider changes."
             : "Set MEMORY_VECTOR_PROVIDER=lancedb to enable vector-backed memory reranking.",
           docsHint: memoryVector.enabled
             ? memoryVector.embedding.degradedReason ?? `Current memory embedding provider: ${memoryVector.embedding.name}.`
@@ -145,7 +145,7 @@ export class SettingsService {
             "OPENAI_TRANSCRIPTIONS_STT_RESPONSE_FORMAT=verbose_json"
           ].join("\n"),
           action: speech.stt.reachable
-            ? "Run pnpm smoke:api:speech after STT provider or voice API changes."
+            ? "Run pnpm smoke:speech after STT provider or voice API changes."
             : "Configure SPEECH_STT_PROVIDER and the selected STT provider environment variables, then restart the API.",
           docsHint: speech.stt.degradedReason ?? "Raw audio is not persisted by default."
         },
@@ -204,7 +204,7 @@ export class SettingsService {
             "# GPT_SOVITS_TEXT_SPLIT_METHOD=cut0"
           ].join("\n"),
           action: speech.tts.reachable
-            ? "Run pnpm smoke:api:speech after TTS provider or voice API changes."
+            ? "Run pnpm smoke:speech after TTS provider or voice API changes."
             : "Configure SPEECH_TTS_PROVIDER=minimax-t2a-v2 for cloud TTS, or gpt-sovits-api for a local service, then restart the API.",
           docsHint: speech.tts.degradedReason ?? "TTS is optional; cloud TTS is supported through the same API-owned speech boundary."
         }

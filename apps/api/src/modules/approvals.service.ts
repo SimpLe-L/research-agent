@@ -1,4 +1,4 @@
-import { Inject, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, Inject, Injectable, NotFoundException } from "@nestjs/common";
 import type { ApprovalRequest, CreateApprovalRequestInput, DecideApprovalRequestInput } from "@sp-agent/shared";
 import { LocalJsonStore } from "./local-json-store.service.js";
 
@@ -54,6 +54,15 @@ export class ApprovalsService {
     return request.status === "approved" ? request : undefined;
   }
 
+  async requireApprovedFor(id: string, input: { extensionId: string; capabilityId: string; input: Record<string, unknown> }) {
+    const request = findApproval(await this.readFile(), id);
+    if (request.status !== "approved") return undefined;
+    if (request.extensionId !== input.extensionId || request.capabilityId !== input.capabilityId || stableStringify(request.input) !== stableStringify(input.input)) {
+      throw new BadRequestException(`Approval request ${id} does not match the requested extension action`);
+    }
+    return request;
+  }
+
   private async readFile(): Promise<ApprovalsFile> {
     const file = await this.store.read<ApprovalsFile>("approvals.json", { requests: [] });
     return { requests: file.requests ?? [] };
@@ -68,4 +77,13 @@ function findApproval(file: ApprovalsFile, id: string) {
   const request = file.requests.find((item) => item.id === id);
   if (!request) throw new NotFoundException(`Approval request ${id} not found`);
   return request;
+}
+
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+  return `{${Object.entries(value as Record<string, unknown>)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, item]) => `${JSON.stringify(key)}:${stableStringify(item)}`)
+    .join(",")}}`;
 }

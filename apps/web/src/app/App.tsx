@@ -8,6 +8,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { ApprovalReview } from "@/components/app/panels/ApprovalReview";
 import { MemoryReview } from "@/components/app/panels/MemoryReview";
 import { SkillCatalog } from "@/components/app/panels/SkillCatalog";
+import { WorkflowReview } from "@/components/app/panels/WorkflowReview";
 import { AssistantThread } from "@/components/app/AssistantThread";
 import { useAgentAssistantRuntime, normalizeThreadTitle } from "./assistant-runtime";
 import { apiBase } from "./api";
@@ -237,6 +238,7 @@ function ChatHeader({
           {status?.extensions?.length ?? 0} ext
         </span>
         <SkillCatalog initialExtensions={status?.extensions} />
+        <WorkflowReview />
         <MemoryReview />
         <ApprovalReview />
         <TooltipIconButton tooltip="Share" className="text-muted-foreground" disabled>

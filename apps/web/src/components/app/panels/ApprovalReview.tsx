@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { apiBase, fetchJson } from "@/app/api";
-import type { ApprovalRequest } from "@/app/types";
+import type { ApprovalRequest, ExtensionInvocationResponse } from "@/app/types";
 
 export function ApprovalReview() {
   const [open, setOpen] = useState(false);
@@ -35,19 +35,47 @@ export function ApprovalReview() {
     if (open) void refreshApprovals();
   }, [open]);
 
+  useEffect(() => {
+    function handleApprovalRequested() {
+      void refreshApprovals();
+    }
+    window.addEventListener("sp-agent:approval-requested", handleApprovalRequested);
+    return () => window.removeEventListener("sp-agent:approval-requested", handleApprovalRequested);
+  }, []);
+
   async function decide(id: string, decision: "approved" | "denied") {
     setStatus(decision === "approved" ? "Approving" : "Denying");
     try {
-      await fetchJson<{ approval: ApprovalRequest }>(`${apiBase}/approvals/${id}`, {
+      const data = await fetchJson<{ approval: ApprovalRequest }>(`${apiBase}/approvals/${id}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ decision, reason: "Reviewed in renderer approval queue." })
       });
+      if (decision === "approved") {
+        await executeApprovedAction(data.approval);
+      }
       await refreshApprovals();
-      setStatus(decision === "approved" ? "Approved" : "Denied");
+      setStatus(decision === "approved" ? "Approved and executed" : "Denied");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Approval update failed");
     }
+  }
+
+  async function executeApprovedAction(approval: ApprovalRequest) {
+    if (!approval.extensionId || !approval.capabilityId) return;
+    const result = await fetchJson<ExtensionInvocationResponse>(`${apiBase}/extensions/${approval.extensionId}/invoke`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        capabilityId: approval.capabilityId,
+        input: approval.input,
+        approvalId: approval.id
+      })
+    });
+    if (result.status !== "completed") {
+      throw new Error(result.degradedReason ?? `Approved action returned ${result.status}`);
+    }
+    window.dispatchEvent(new CustomEvent("sp-agent:approval-executed", { detail: approval }));
   }
 
   return (

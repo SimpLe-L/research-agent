@@ -309,6 +309,18 @@ export const projectDocSearchSchema = z.object({
 });
 export type ProjectDocSearchInput = z.infer<typeof projectDocSearchSchema>;
 
+export const projectPlanSchema = z.object({
+  goal: z.string().min(1),
+  limit: z.coerce.number().int().positive().max(10).default(5)
+});
+export type ProjectPlanInput = z.infer<typeof projectPlanSchema>;
+
+export const contextBriefingSchema = z.object({
+  includeWorkflows: z.coerce.boolean().default(true),
+  workflowLimit: z.coerce.number().int().positive().max(10).default(5)
+});
+export type ContextBriefingInput = z.infer<typeof contextBriefingSchema>;
+
 export const localBookmarkSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -330,6 +342,13 @@ export const localBookmarkSearchSchema = z.object({
   limit: z.coerce.number().int().positive().max(20).default(5)
 });
 export type LocalBookmarkSearchInput = z.infer<typeof localBookmarkSearchSchema>;
+
+export const localBookmarkDigestSchema = z.object({
+  query: z.string().optional(),
+  tag: z.string().optional(),
+  limit: z.coerce.number().int().positive().max(20).default(10)
+});
+export type LocalBookmarkDigestInput = z.infer<typeof localBookmarkDigestSchema>;
 
 export const speechProviderStatusSchema = z.object({
   name: z.string(),

@@ -113,6 +113,14 @@ const localContextSkill: ExtensionManifest = {
       permissions: ["context:read"],
       inputSchema: "{}",
       outputSchema: "{ now: string, timezone: string, runtimeProvider: string, extensionIds: string[] }"
+    },
+    {
+      id: "context.briefing",
+      label: "Read local context briefing",
+      description: "Return a read-only operational briefing with runtime, extension readiness, safety policy, and recent workflow status.",
+      permissions: ["context:read", "extensions:read", "workflow:read"],
+      inputSchema: "contextBriefingSchema",
+      outputSchema: "{ now: string, runtimeProvider: string, extensionSummary: object, workflowSummary?: object }"
     }
   ]
 };
@@ -133,6 +141,14 @@ const localProjectSkill: ExtensionManifest = {
       permissions: ["project_docs:read", "workflow:run"],
       inputSchema: "projectDocSearchSchema",
       outputSchema: "{ workflow: workflowRun }"
+    },
+    {
+      id: "project.plan",
+      label: "Create project plan",
+      description: "Create a read-only project plan from allowlisted project docs and return the supporting workflow record.",
+      permissions: ["project_docs:read", "workflow:run"],
+      inputSchema: "projectPlanSchema",
+      outputSchema: "{ plan: object, workflow: workflowRun }"
     }
   ]
 };
@@ -153,6 +169,14 @@ const localBookmarksConnector: ExtensionManifest = {
       permissions: ["bookmarks:read", "connector:read"],
       inputSchema: "localBookmarkSearchSchema",
       outputSchema: "{ bookmarks: localBookmark[], degradedReason?: string }"
+    },
+    {
+      id: "bookmarks.digest",
+      label: "Digest local bookmarks",
+      description: "Create a read-only digest of configured local bookmarks grouped by tags and filtered by optional query or tag.",
+      permissions: ["bookmarks:read", "connector:read"],
+      inputSchema: "localBookmarkDigestSchema",
+      outputSchema: "{ digest: object, bookmarks: localBookmark[], degradedReason?: string }"
     }
   ]
 };

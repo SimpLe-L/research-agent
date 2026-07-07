@@ -3,10 +3,13 @@ import { findCapability, getExtensionManifest, getExtensionRuntimeStatus } from 
 import { getSpeechStatus } from "@sp-agent/speech";
 import {
   consolidateMemorySchema,
+  contextBriefingSchema,
   createMemoryCandidateSchema,
   localBookmarkConnectorFileSchema,
+  localBookmarkDigestSchema,
   localBookmarkSearchSchema,
   mergeMemorySchema,
+  projectPlanSchema,
   promoteMemorySchema,
   projectDocSearchSchema,
   searchMemorySchema,
@@ -118,6 +121,12 @@ export class ExtensionsService {
           })
       },
       {
+        extensionId: "local.context",
+        capabilityId: "context.briefing",
+        handle: async (request, audit) =>
+          this.completed("local.context", "context.briefing", audit, await this.buildContextBriefing(contextBriefingSchema.parse(request.input ?? {})))
+      },
+      {
         extensionId: "local.project",
         capabilityId: "project.search_docs",
         handle: async (request, audit) =>
@@ -129,10 +138,22 @@ export class ExtensionsService {
           )
       },
       {
+        extensionId: "local.project",
+        capabilityId: "project.plan",
+        handle: async (request, audit) =>
+          this.completed("local.project", "project.plan", audit, await this.createProjectPlan(projectPlanSchema.parse(request.input)))
+      },
+      {
         extensionId: "local.bookmarks",
         capabilityId: "bookmarks.search",
         handle: async (request, audit) =>
           this.completed("local.bookmarks", "bookmarks.search", audit, await this.searchLocalBookmarks(localBookmarkSearchSchema.parse(request.input)))
+      },
+      {
+        extensionId: "local.bookmarks",
+        capabilityId: "bookmarks.digest",
+        handle: async (request, audit) =>
+          this.completed("local.bookmarks", "bookmarks.digest", audit, await this.digestLocalBookmarks(localBookmarkDigestSchema.parse(request.input ?? {})))
       }
     ];
   }
@@ -202,7 +223,11 @@ export class ExtensionsService {
   private async ensureApproved(request: InvokeExtensionInput, audit: ExtensionInvocationAudit, reason: string) {
     if (audit.mode === "read_only") return { approved: true as const };
     if (request.approvalId) {
-      const approved = await this.approvalsService.requireApproved(request.approvalId);
+      const approved = await this.approvalsService.requireApprovedFor(request.approvalId, {
+        extensionId: audit.extensionId,
+        capabilityId: audit.capabilityId,
+        input: request.input
+      });
       if (approved) return { approved: true as const };
     }
     const approval = await this.approvalsService.create({
@@ -243,6 +268,123 @@ export class ExtensionsService {
       bookmarks,
       searched: file.bookmarks.length,
       degradedReason: file.bookmarks.length === 0 ? "No local bookmark connector data is configured." : bookmarks.length === 0 ? "No configured local bookmarks matched the query." : undefined
+    };
+  }
+
+  private async digestLocalBookmarks(input: { query?: string; tag?: string; limit: number }) {
+    const file = localBookmarkConnectorFileSchema.parse(await this.store.read("connectors/bookmarks.json", { bookmarks: [] }));
+    const terms = tokenize(input.query ?? input.tag ?? "");
+    const tag = input.tag?.trim().toLowerCase();
+    const filtered = file.bookmarks
+      .filter((bookmark) => !tag || bookmark.tags.some((item) => item.toLowerCase() === tag))
+      .map((bookmark) => ({
+        bookmark,
+        score: terms.length > 0 ? scoreBookmark(bookmark, terms) : 1
+      }))
+      .filter((item) => terms.length === 0 || item.score > 0)
+      .sort((a, b) => b.score - a.score || b.bookmark.createdAt.localeCompare(a.bookmark.createdAt))
+      .slice(0, input.limit)
+      .map((item) => item.bookmark);
+    const tagCounts = new Map<string, number>();
+    for (const bookmark of filtered) {
+      for (const item of bookmark.tags) {
+        tagCounts.set(item, (tagCounts.get(item) ?? 0) + 1);
+      }
+    }
+    return {
+      digest: {
+        query: input.query,
+        tag: input.tag,
+        totalConfigured: file.bookmarks.length,
+        matched: filtered.length,
+        topTags: [...tagCounts.entries()]
+          .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+          .slice(0, 8)
+          .map(([name, count]) => ({ name, count })),
+        highlights: filtered.slice(0, 5).map((bookmark) => ({
+          id: bookmark.id,
+          title: bookmark.title,
+          url: bookmark.url,
+          tags: bookmark.tags,
+          description: bookmark.description
+        }))
+      },
+      bookmarks: filtered,
+      degradedReason: file.bookmarks.length === 0
+        ? "No local bookmark connector data is configured."
+        : filtered.length === 0
+          ? "No configured local bookmarks matched the digest filters."
+          : undefined
+    };
+  }
+
+  private async createProjectPlan(input: { goal: string; limit: number }) {
+    const { workflow } = await this.workflowsService.runProjectDocSearch({ query: input.goal, limit: input.limit });
+    const result = workflow.result as { hits?: Array<{ file: string; score: number; preview: string }>; searchedFiles?: string[] } | undefined;
+    const hits = result?.hits ?? [];
+    return {
+      plan: {
+        goal: input.goal,
+        summary: hits.length > 0
+          ? `Plan grounded in ${hits.length} allowlisted project document match${hits.length === 1 ? "" : "es"}.`
+          : "No matching project documents were found; plan is limited to the requested goal and repository guardrails.",
+        nextSteps: buildProjectPlanSteps(input.goal, hits),
+        supportingFiles: hits.map((hit) => ({ file: hit.file, score: hit.score, preview: hit.preview })),
+        searchedFiles: result?.searchedFiles ?? []
+      },
+      workflow,
+      degradedReason: workflow.degradedReason
+    };
+  }
+
+  private async buildContextBriefing(input: { includeWorkflows: boolean; workflowLimit: number }) {
+    const status = await this.list();
+    const extensions = status.extensions.map((extension) => ({
+      id: extension.id,
+      name: extension.name,
+      kind: extension.kind,
+      status: extension.status,
+      degradedReason: extension.degradedReason,
+      capabilities: extension.capabilities.map((capability) => ({
+        id: capability.id,
+        label: capability.label,
+        permissions: capability.permissions,
+        auditMode: buildPermissionAudit(extension.id, capability.id, capability).mode
+      }))
+    }));
+    const workflowRecords = input.includeWorkflows ? await this.workflowsService.list() : [];
+    const recentWorkflows = workflowRecords.slice(0, input.workflowLimit).map((workflow) => ({
+      id: workflow.id,
+      kind: workflow.kind,
+      status: workflow.status,
+      degradedReason: workflow.degradedReason,
+      error: workflow.error,
+      updatedAt: workflow.updatedAt,
+      nodeEventCount: workflow.nodeEvents.length
+    }));
+    return {
+      now: new Date().toISOString(),
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      runtimeProvider: process.env.AGENT_RUNTIME_PROVIDER ?? "pi",
+      safetyModel: status.safetyModel,
+      extensionSummary: {
+        total: extensions.length,
+        active: extensions.filter((extension) => extension.status === "active").length,
+        degraded: extensions.filter((extension) => extension.status === "degraded").length,
+        planned: extensions.filter((extension) => extension.status === "planned").length,
+        extensions
+      },
+      workflowSummary: input.includeWorkflows
+        ? {
+            total: workflowRecords.length,
+            pending: workflowRecords.filter((workflow) => workflow.status === "pending").length,
+            running: workflowRecords.filter((workflow) => workflow.status === "running").length,
+            completed: workflowRecords.filter((workflow) => workflow.status === "completed").length,
+            failed: workflowRecords.filter((workflow) => workflow.status === "failed").length,
+            cancelled: workflowRecords.filter((workflow) => workflow.status === "cancelled").length,
+            recent: recentWorkflows
+          }
+        : undefined
     };
   }
 }
@@ -322,6 +464,43 @@ function scoreBookmark(bookmark: { title: string; url: string; description?: str
     .join(" ")
     .toLowerCase();
   return terms.reduce((score, term) => score + countOccurrences(weightedText, term), 0);
+}
+
+function buildProjectPlanSteps(goal: string, hits: Array<{ file: string; preview: string }>) {
+  const steps = [
+    {
+      id: "scope",
+      title: "Confirm scope",
+      detail: `Keep the work scoped to: ${goal}`
+    }
+  ];
+  if (hits.some((hit) => hit.file === "AGENTS.md")) {
+    steps.push({
+      id: "rules",
+      title: "Apply repository rules",
+      detail: "Use AGENTS.md as the source of development conventions, safety boundaries, and active product direction."
+    });
+  }
+  if (hits.some((hit) => hit.file === "ARCHITECTURE.md")) {
+    steps.push({
+      id: "architecture",
+      title: "Check architecture boundaries",
+      detail: "Align package boundaries, API ownership, extension permissions, memory, workflow, and speech constraints with ARCHITECTURE.md."
+    });
+  }
+  if (hits.some((hit) => hit.file === "PROCESS.md")) {
+    steps.push({
+      id: "process",
+      title: "Update process state",
+      detail: "Record meaningful implementation progress and verification results in PROCESS.md."
+    });
+  }
+  steps.push({
+    id: "verify",
+    title: "Run focused verification",
+    detail: "Run the smallest smoke/typecheck set that covers the touched API, extension, workflow, memory, or renderer boundary."
+  });
+  return steps;
 }
 
 function countOccurrences(value: string, term: string) {
