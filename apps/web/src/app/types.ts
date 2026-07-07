@@ -1,0 +1,188 @@
+export type ProviderStatus = {
+  configured?: boolean;
+  reachable?: boolean;
+  degradedReason?: string;
+};
+
+export type AgentStatus = {
+  mode: "local_personal_agent";
+  piRuntime?: ProviderStatus & {
+    provider?: string;
+    model?: string;
+    selectedModel?: string;
+  };
+  extensions?: Array<{ id: string; name: string; status: string }>;
+};
+
+export type ExtensionCapability = {
+  id: string;
+  label: string;
+  description: string;
+  permissions: string[];
+  inputSchema?: string;
+  outputSchema?: string;
+};
+
+export type ExtensionManifest = {
+  id: string;
+  name: string;
+  description: string;
+  kind: "core" | "skill" | "connector" | "workflow";
+  phase: string;
+  status: "active" | "disabled" | "planned" | "degraded";
+  entrypoint?: string;
+  capabilities: ExtensionCapability[];
+  degradedReason?: string;
+};
+
+export type ExtensionRuntimeCatalog = {
+  safetyModel: {
+    defaultToolPolicy: "read_only";
+    disabledToolClasses: string[];
+    highRiskActions: string[];
+  };
+  extensions: ExtensionManifest[];
+};
+
+export type AgentMessageResponse = {
+  sessionId: string;
+  role: "assistant";
+  content: string;
+  provider: string;
+  model?: string;
+  degradedReason?: string;
+  activeTools?: string[];
+  toolCalls?: Array<Record<string, unknown>>;
+};
+
+export type AgentStreamEvent =
+  | { type: "metadata"; sessionId: string; memoryContextCount: number }
+  | { type: "text_delta"; text: string }
+  | { type: "done"; sessionId: string; result: AgentMessageResponse }
+  | { type: "error"; message: string };
+
+export type VoiceStatus = {
+  ready: boolean;
+  degradedReason?: string;
+  stt: ProviderStatus & { name: string };
+  tts: ProviderStatus & { name: string };
+};
+
+export type VoiceChatResponse = {
+  sessionId: string;
+  transcript?: string;
+  assistantText: string;
+  audioBase64?: string;
+  mimeType?: string;
+  degradedReason?: string;
+  timing?: {
+    sttMs: number;
+    agentMs: number;
+    ttsMs: number;
+    totalMs: number;
+  };
+};
+
+
+
+export type ThreadRecord = {
+  id: string;
+  title: string;
+  createdAt?: string;
+  updatedAt: string;
+  messages?: Array<{ id?: string; role: string; content: string; createdAt: string }>;
+};
+
+export type ApprovalRequest = {
+  id: string;
+  extensionId?: string;
+  capabilityId?: string;
+  action: string;
+  reason: string;
+  permissions: string[];
+  input: Record<string, unknown>;
+  status: "pending" | "approved" | "denied" | "expired";
+  createdAt: string;
+  updatedAt: string;
+  decidedAt?: string;
+};
+
+export type MemoryKind = "core" | "journal" | "summary" | "procedural" | "project";
+export type MemoryStatus = "candidate" | "active" | "tombstoned";
+
+export type MemoryEntry = {
+  id: string;
+  kind: MemoryKind;
+  scope: "global" | "session";
+  sessionId?: string;
+  content: string;
+  source: { type: string; id?: string; label?: string };
+  provenance: Record<string, unknown>;
+  confidence: number;
+  sensitivity: "normal" | "sensitive";
+  tags: string[];
+  status: MemoryStatus;
+  conflictsWith: string[];
+  conflictReason?: string;
+  occurredAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  promotedAt?: string;
+  tombstonedAt?: string;
+};
+
+export type MemorySearchResult = {
+  entry: MemoryEntry;
+  score: number;
+  matchedTerms: string[];
+  rankingSignals: string[];
+  sourceSnippet?: string;
+  citation?: {
+    memoryId: string;
+    sourceType: string;
+    sourceId?: string;
+    sourceLabel?: string;
+    sessionId?: string;
+    messageId?: string;
+    occurredAt?: string;
+    createdAt: string;
+    snippet: string;
+  };
+  debug?: {
+    strategy?: "core_semantic" | "journal_temporal" | "hybrid";
+    score: number;
+    matchedTermCount: number;
+    rankingSignals: string[];
+    vectorScore?: number;
+    temporalWindow?: boolean;
+  };
+};
+
+export type MemoryConsolidationSuggestion = {
+  sourceIds: string[];
+  content: string;
+  kind: MemoryKind;
+  reason: string;
+  confidence: number;
+  sensitivity: "normal" | "sensitive";
+  occurredAt?: string;
+  tags: string[];
+  conflictReason?: string;
+};
+
+export type MemoryAuditEvent = {
+  id: string;
+  memoryId: string;
+  action: string;
+  reason?: string;
+  sourceMemoryIds: string[];
+  createdAt: string;
+};
+
+export type MemoryUpdatePayload = {
+  content: string;
+  kind: MemoryKind;
+  sensitivity: "normal" | "sensitive";
+  tags: string[];
+  occurredAt?: string;
+};

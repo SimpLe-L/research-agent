@@ -1,0 +1,248 @@
+import React, { useEffect, useState } from "react";
+import { AssistantRuntimeProvider, ThreadListItemPrimitive, ThreadListPrimitive, useAuiState } from "@assistant-ui/react";
+import { Archive, Bot, Menu, MoreHorizontal, PanelLeft, Plus, Share, Trash2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { ApprovalReview } from "@/components/app/panels/ApprovalReview";
+import { MemoryReview } from "@/components/app/panels/MemoryReview";
+import { SkillCatalog } from "@/components/app/panels/SkillCatalog";
+import { AssistantThread } from "@/components/app/AssistantThread";
+import { useAgentAssistantRuntime, normalizeThreadTitle } from "./assistant-runtime";
+import { apiBase } from "./api";
+import type { AgentStatus } from "./types";
+import { cn } from "@/lib/utils";
+
+export function App() {
+  const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
+  const [statusText, setStatusText] = useState("Checking runtime");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function refreshStatus() {
+      try {
+        const res = await fetch(`${apiBase}/agent/status`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const status = (await res.json()) as AgentStatus;
+        if (cancelled) return;
+        setAgentStatus(status);
+        const runtime = status.piRuntime;
+        if (!runtime?.configured) {
+          setStatusText("Runtime missing key");
+        } else if (!runtime.reachable) {
+          setStatusText("Runtime degraded");
+        } else {
+          setStatusText("Base ready");
+        }
+      } catch {
+        if (!cancelled) {
+          setAgentStatus(null);
+          setStatusText("API unavailable");
+        }
+      }
+    }
+    void refreshStatus();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const runtime = useAgentAssistantRuntime();
+
+  return (
+    <AssistantRuntimeProvider runtime={runtime}>
+      <TooltipProvider>
+        <main className="min-h-svh bg-background text-foreground" data-testid="app-shell">
+          <section
+            className={cn(
+              "grid h-svh min-h-0 overflow-hidden bg-background transition-[grid-template-columns] duration-200 md:grid-cols-[260px_minmax(0,1fr)]",
+              sidebarCollapsed && "md:grid-cols-[56px_minmax(0,1fr)]"
+            )}
+            data-testid="view-chat"
+          >
+            <div className="hidden" data-testid="model-tabs" aria-hidden="true" />
+            <AssistantThreadSidebar collapsed={sidebarCollapsed} />
+            <section className="flex min-w-0 flex-col overflow-hidden bg-background" data-testid="agent-thread-panel">
+              <ChatHeader
+                sidebarCollapsed={sidebarCollapsed}
+                onToggleSidebar={() => setSidebarCollapsed((value) => !value)}
+                status={agentStatus}
+                statusText={statusText}
+              />
+              <AssistantThread />
+            </section>
+          </section>
+        </main>
+      </TooltipProvider>
+    </AssistantRuntimeProvider>
+  );
+}
+
+function TooltipIconButton({
+  tooltip,
+  className,
+  children,
+  ...props
+}: React.ComponentProps<typeof Button> & { tooltip: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<Button variant="ghost" size="icon" className={className} {...props} />}>
+        {children}
+      </TooltipTrigger>
+      <TooltipContent>{tooltip}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+function Logo({ collapsed = false }: { collapsed?: boolean }) {
+  return (
+    <div className={cn("flex h-14 min-w-0 items-center gap-2.5 px-5", collapsed && "justify-center px-0")}>
+      <Bot className="size-5 shrink-0" />
+      <strong className={cn("truncate text-[15px] font-semibold transition-all", collapsed && "w-0 opacity-0")}>
+        assistant-ui
+      </strong>
+    </div>
+  );
+}
+
+function ThreadListContent({ collapsed = false }: { collapsed?: boolean }) {
+  return (
+    <ThreadListPrimitive.Root className={cn("flex min-h-0 flex-1 flex-col px-3 py-2", collapsed && "items-center px-2")}>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <ThreadListPrimitive.New
+              className={cn(
+                "inline-flex h-10 w-full cursor-pointer items-center gap-2.5 rounded-lg bg-muted px-3 text-left text-sm font-medium text-foreground transition-colors hover:bg-accent",
+                collapsed && "w-10 justify-center px-0"
+              )}
+              data-testid="new-thread-button"
+            />
+          }
+        >
+          <Plus className="size-5 shrink-0" />
+          <span className={cn(collapsed && "hidden")}>New Thread</span>
+        </TooltipTrigger>
+        {collapsed && <TooltipContent side="right">New Thread</TooltipContent>}
+      </Tooltip>
+      {!collapsed && <div className="mx-2 mt-6 mb-2 text-xs font-semibold text-muted-foreground">Today</div>}
+      <div className={cn("grid min-h-0 content-start gap-1 overflow-auto", collapsed && "hidden")} data-testid="thread-list">
+        <ThreadListPrimitive.Items>
+          {() => (
+            <ThreadListItemPrimitive.Root className="min-w-0">
+              <div className="group/thread-item grid min-w-0 grid-cols-[minmax(0,1fr)_30px] items-center rounded-lg hover:bg-accent focus-within:bg-accent has-[[data-active]]:bg-accent has-[[aria-current=true]]:bg-accent">
+                <ThreadListItemPrimitive.Trigger className="block min-h-8 w-full cursor-pointer overflow-hidden truncate rounded-lg bg-transparent px-2.5 py-2 text-left text-sm text-foreground">
+                  <ThreadListItemPrimitive.Title fallback="New Chat" />
+                </ThreadListItemPrimitive.Trigger>
+                <DropdownMenu>
+                  <DropdownMenuTrigger className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground opacity-0 transition hover:bg-muted hover:text-foreground group-hover/thread-item:opacity-100 data-popup-open:opacity-100" title="Thread actions" aria-label="Thread actions" data-testid="thread-actions-button">
+                    <MoreHorizontal className="size-4" />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-36">
+                    <ThreadListItemPrimitive.Archive
+                      render={
+                        <DropdownMenuItem data-testid="thread-archive-action">
+                          <Archive className="size-3.5" />
+                          <span>Archive</span>
+                        </DropdownMenuItem>
+                      }
+                    />
+                    <ThreadListItemPrimitive.Delete
+                      render={
+                        <DropdownMenuItem variant="destructive" data-testid="thread-delete-action">
+                          <Trash2 className="size-3.5" />
+                          <span>Delete</span>
+                        </DropdownMenuItem>
+                      }
+                    />
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            </ThreadListItemPrimitive.Root>
+          )}
+        </ThreadListPrimitive.Items>
+      </div>
+    </ThreadListPrimitive.Root>
+  );
+}
+
+function AssistantThreadSidebar({ collapsed }: { collapsed: boolean }) {
+  return (
+    <aside className="hidden min-w-0 flex-col overflow-hidden bg-muted/30 md:flex" data-testid="thread-sidebar">
+      <Logo collapsed={collapsed} />
+      <ThreadListContent collapsed={collapsed} />
+    </aside>
+  );
+}
+
+function MobileSidebar() {
+  return (
+    <Sheet>
+      <SheetTrigger render={<Button variant="ghost" size="icon" className="inline-flex md:hidden" />}>
+        <Menu className="size-4.5" />
+        <span className="sr-only">Toggle menu</span>
+      </SheetTrigger>
+      <SheetContent side="left" className="w-[min(320px,86vw)] gap-0 p-0" showCloseButton={false}>
+        <Logo />
+        <ThreadListContent />
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+function ThreadTitle() {
+  const title = useAuiState((state) => {
+    const item = state.threads.threadItems.find((thread) => thread.id === state.threads.mainThreadId);
+    return item?.title;
+  });
+  return <strong className="block max-w-[44vw] truncate text-[15px] font-semibold md:max-w-[280px]">{normalizeThreadTitle(title)}</strong>;
+}
+
+function ChatHeader({
+  sidebarCollapsed,
+  onToggleSidebar,
+  status,
+  statusText
+}: {
+  sidebarCollapsed: boolean;
+  onToggleSidebar: () => void;
+  status: AgentStatus | null;
+  statusText: string;
+}) {
+  const runtimeLabel = status?.piRuntime?.selectedModel ?? status?.piRuntime?.model ?? status?.piRuntime?.provider ?? "Base";
+  return (
+    <header className="flex h-13 items-center justify-between gap-2 px-2.5 md:px-4">
+      <div className="flex min-w-0 items-center gap-2">
+        <MobileSidebar />
+        <TooltipIconButton
+          tooltip={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
+          className="hidden md:inline-flex"
+          onClick={onToggleSidebar}
+          aria-label={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
+        >
+          <PanelLeft className="size-4.5" />
+        </TooltipIconButton>
+        <ThreadTitle />
+      </div>
+      <div className="flex min-w-0 items-center gap-2">
+        <span className="hidden whitespace-nowrap text-xs text-muted-foreground md:inline" data-testid="runtime-label">
+          {runtimeLabel}
+        </span>
+        <span className="hidden whitespace-nowrap text-xs text-muted-foreground md:inline" data-testid="provider-status-button">
+          {statusText}
+        </span>
+        <span className="hidden rounded-full border px-2.5 py-1 text-xs leading-none text-muted-foreground md:inline" data-testid="extension-count">
+          {status?.extensions?.length ?? 0} ext
+        </span>
+        <SkillCatalog initialExtensions={status?.extensions} />
+        <MemoryReview />
+        <ApprovalReview />
+        <TooltipIconButton tooltip="Share" className="text-muted-foreground" disabled>
+          <Share className="size-4.5" />
+        </TooltipIconButton>
+      </div>
+    </header>
+  );
+}

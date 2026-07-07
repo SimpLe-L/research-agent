@@ -112,9 +112,11 @@ assistant-ui RemoteThreadListRuntime
 The renderer should stay compact and predictable:
 
 - Preserve stable `data-testid` anchors.
+- Keep `apps/web/src/main.tsx` as bootstrap only: router creation, root render, and global style import. Product shell components should live under `apps/web/src/app` and `apps/web/src/components/app` so new capabilities do not bloat the entrypoint again.
 - Keep thread/session behavior visible.
 - Keep voice controls wired only to the API-owned speech layer; when providers are missing, show a degraded state without breaking typed chat.
 - Keep the composer mic as a compact entry point. Rich voice state belongs in a dedicated voice call overlay so recording, transcript, playback, provider status, and future VAD/interruption controls do not crowd the main composer.
+- Keep the skill catalog as a compact header entry backed by `/api/extensions`. It should expose active/degraded/planned readiness, permission lists, and read-only vs approval/provider audit mode without turning the first screen into a capability workbench.
 - Keep memory review as a compact header entry beside extension and approval status. The review sheet can search, filter, promote, update, merge, forget, and inspect provenance/audit without turning the first screen into a separate dashboard.
 - Do not add marketing hero pages, decorative dashboards, or complex workbench navigation to the first screen.
 - Use `assistant-ui` runtime/primitives as the chat state and interaction boundary instead of custom chat state where possible.
@@ -315,6 +317,7 @@ Current implementation:
 - Memory extraction and summarization use an API-owned memory intelligence boundary. The default `MEMORY_INTELLIGENCE_PROVIDER=deterministic` path is rule-based and offline; `MEMORY_INTELLIGENCE_PROVIDER=siliconflow` may call a configured SiliconFlow chat-completions model for JSON-only candidate extraction and summaries, with deterministic fallback on missing keys, HTTP errors, invalid JSON, or empty model output.
 - Memory consolidation is suggestion-first. `POST /api/memory/consolidate` and `local.memory/memory.consolidate` inspect candidate/active memories and return merge-shaped suggestions without mutating durable memory; actual merges still go through the API merge path and audit.
 - The renderer exposes a first memory review surface in the chat header. It calls the API-owned memory endpoints for text/kind/status/date/sensitivity search, candidate promotion, editing, selected-memory merge, tombstone forgetting, and per-memory provenance/audit inspection.
+- The renderer exposes a first skill catalog surface in the chat header. It calls `/api/extensions`, groups active, readiness-gated/degraded, and planned capabilities, and shows capability permissions plus the same read-only vs write/provider audit mode enforced by the API.
 - `POST /api/agent/messages` performs deterministic read-only memory retrieval before calling the runtime and returns the selected `memoryContext` with citations and retrieval debug. The agent retrieval gate only injects active, non-sensitive memory by default; candidates remain reviewable/searchable without becoming hidden prompt state. Assistant-message metadata persists a compact `memoryContextDebug` record for later diagnostics without granting the runtime memory write access.
 
 ## Skill Task Model

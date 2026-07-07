@@ -90,6 +90,7 @@ Complete when:
 - Frontend thread history uses a thread-scoped assistant-ui `ThreadHistoryAdapter` that loads persisted API session messages.
 - Frontend remote-thread creation now preserves the assistant-ui local thread id to API chat session id mapping, so agent turns and voice turns send the real remote session id instead of creating duplicate backend sessions with the same generated title.
 - New assistant-ui threads render `New Chat` as the header and sidebar placeholder while the first response/title generation is pending, then replace it with the generated summary title.
+- Renderer bootstrap is now split from the chat shell: `apps/web/src/main.tsx` only mounts TanStack Router and imports global styles, while assistant runtime, shell layout, thread UI, voice controls, and review panels live under `apps/web/src/app` and `apps/web/src/components/app`.
 - Frontend styling now has Tailwind CSS v4 and shadcn/base UI initialized in `apps/web`, with shadcn `button`, `sheet`, `tooltip`, and `dropdown-menu` components available.
 - Tailwind CSS v4 now maps shadcn theme tokens through `@theme inline`, so shadcn/base UI popovers, dropdowns, sheets, and tooltips generate the expected background, foreground, border, ring, and radius utilities.
 - The renderer chat shell now follows the official assistant-ui/shadcn style boundary more closely: `ThreadPrimitive`, `ComposerPrimitive`, thread list, sidebar, and header styling live mostly in component Tailwind classes, while `styles.css` is limited to Tailwind/shadcn setup, theme tokens, global resets, and project-specific approval/voice overlay styles.
@@ -120,6 +121,7 @@ Complete when:
 - `pnpm smoke:desktop:preflight` protects Electron startup invariants without needing GUI approval.
 - `pnpm smoke:desktop:api-child` verifies the same Node child-process strategy Electron uses can load the Pi SDK and read the extension registry.
 - The renderer header shows the active extension count so the shell exposes extension capacity without adding a complex workbench UI.
+- The renderer header now includes a compact skill catalog entry backed by `/api/extensions`; the review sheet groups active, degraded/readiness-gated, and planned skills and shows capability permissions plus read-only vs approval/provider audit mode.
 - The renderer header includes an approval review entry with pending count, a right-side review panel, and approve/deny actions backed by `/api/approvals`.
 - `packages/speech` defines STT/TTS provider adapter contracts with deterministic smoke adapters, explicit degraded states, `openai-audio-transcriptions-stt`, legacy `openai-compatible-stt`, self-hosted `gpt-sovits-api`, cloud `minimax-t2a-v2`, and cloud `mimo-v2.5-tts`.
 - API voice endpoints exist for Phase 1 half-duplex chat: `GET /api/voice/status`, `POST /api/voice/transcribe`, `POST /api/voice/synthesize`, and `POST /api/voice/chat`.
@@ -233,7 +235,7 @@ Goal:
 
 Remaining work:
 
-1. Add a skill catalog UI:
+1. Add a skill catalog UI: Done for the first compact header sheet.
    - active skills
    - degraded skills
    - readiness-gated skills
@@ -308,7 +310,7 @@ Acceptance:
 
 1. Memory remains the highest-priority product area, but the backend foundations, first review UI, optional LLM-backed extraction/summarization boundary, and consolidation suggestions are now usable. Remaining memory work should focus on evaluating extraction quality with real conversations and refining consolidation policy.
 2. Memory review UI exists beside the extension/plugin count with search, date filters, grouped kinds, candidate promotion, update, merge, forget, provenance, and audit details.
-3. Skills/workflows should wait until memory is usable, then expand through a skill catalog UI, approval-gated write workflow, workflow detail UI, and selected high-value read-only skills.
+3. Skills/workflows now have a first catalog UI; next expansion should focus on an approval-gated write workflow, workflow detail UI, and selected high-value read-only skills.
 4. Voice optimization is intentionally last. Phase 1 half-duplex voice works, but interruptible voice, streaming/chunked TTS, provider settings UI, and packaged deployment defaults remain future work.
 5. Graph-backed workflows are not implemented yet. Add LangGraph only when a skill truly needs graph orchestration, and keep it behind the extension boundary.
 6. Workflow runner remains local-JSON backed and in-process for execution; it now has async start and stale recovery, but durable cross-process workers are still future hardening.
@@ -372,9 +374,11 @@ Latest verification:
 
 - `pnpm typecheck`
 - `pnpm build`
+- `pnpm --filter @sp-agent/web typecheck`
+- `pnpm --filter @sp-agent/web build`
 - `pnpm smoke:web:routes`
 - Route smoke now validates the Tailwind/shadcn theme tokens plus retained approval/voice CSS markers instead of requiring the removed legacy `.baseShell` stylesheet marker.
-- Approval UI anchors are included in `pnpm smoke:web:routes`.
+- Approval, memory, and skill catalog UI anchors are included in `pnpm smoke:web:routes`.
 - Browser visual check at desktop `1280x720` and mobile `390x844`: no missing core anchors and no horizontal overflow.
 - `pnpm --filter @sp-agent/web build`
 - `pnpm smoke:web:routes`
@@ -447,7 +451,7 @@ Acceptance:
 
 ### Phase 4: Skill And Workflow Layer
 
-Status: verified non-speech implementation; graph and durable-worker hardening remain future work.
+Status: verified non-speech implementation with a first desktop skill catalog; graph, workflow detail UI, approval-gated write workflows, and durable-worker hardening remain future work.
 
 Deliverables:
 
@@ -459,12 +463,16 @@ Deliverables:
 - Workflow records include status, timestamps, cancellation, retry, degraded reason, and node events. Done for the local JSON runner.
 - Add async workflow start and stale pending/running recovery. Done for the local project-doc workflow path.
 - Add a first connector-backed read-only personal skill. Done with `local.bookmarks`.
+- Add a desktop skill catalog UI for active/degraded/readiness-gated skills and capability audit mode. Done in the renderer header sheet backed by `/api/extensions`.
 - If LangGraph is introduced, wrap it inside the skill capability and keep node events observable.
 
 Acceptance:
 
 - API smoke for the implemented skill.
 - `pnpm smoke:api:workflows`
+- `pnpm --filter @sp-agent/web typecheck`
+- `pnpm --filter @sp-agent/web build`
+- `pnpm smoke:web:routes`
 - Async workflow start and connector-backed skill execution are covered by `pnpm smoke:api:workflows` and `pnpm smoke:api:extensions`.
 - Existing chat, memory, and runtime smokes still pass.
 
