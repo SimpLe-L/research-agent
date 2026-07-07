@@ -2,11 +2,15 @@ import { Inject, Injectable } from "@nestjs/common";
 import { getAgentRuntimeStatus } from "@sp-agent/agent-runtime";
 import { getSpeechStatus } from "@sp-agent/speech";
 import type { AppSettings, ProviderReadinessItem } from "@sp-agent/shared";
+import { MemoryIntelligenceService } from "./memory-intelligence.service.js";
 import { MemoryVectorService } from "./memory-vector.service.js";
 
 @Injectable()
 export class SettingsService {
-  constructor(@Inject(MemoryVectorService) private readonly memoryVectorService: MemoryVectorService) {}
+  constructor(
+    @Inject(MemoryVectorService) private readonly memoryVectorService: MemoryVectorService,
+    @Inject(MemoryIntelligenceService) private readonly memoryIntelligenceService: MemoryIntelligenceService
+  ) {}
 
   private settings: AppSettings = {
     llmProvider: "pi",
@@ -22,6 +26,7 @@ export class SettingsService {
     const piRuntime = await getAgentRuntimeStatus(process.env);
     const speech = await getSpeechStatus(process.env);
     const memoryVector = this.memoryVectorService.getStatus();
+    const memoryIntelligence = this.memoryIntelligenceService.getStatus();
     return {
       items: [
         {
@@ -92,6 +97,31 @@ export class SettingsService {
           docsHint: memoryVector.enabled
             ? memoryVector.embedding.degradedReason ?? `Current memory embedding provider: ${memoryVector.embedding.name}.`
             : "Vector search is optional; JSON-backed lexical/temporal memory search remains available when disabled."
+        },
+        {
+          id: "memory-intelligence",
+          label: "Memory intelligence",
+          status: readinessStatus(memoryIntelligence.configured, memoryIntelligence.reachable),
+          capability: "Optional LLM-backed memory extraction and summarization with deterministic fallback",
+          envVars: [
+            "MEMORY_INTELLIGENCE_PROVIDER",
+            "MEMORY_INTELLIGENCE_MODEL",
+            "MEMORY_INTELLIGENCE_TIMEOUT_MS",
+            "SILICONFLOW_BASE_URL",
+            "SILICONFLOW_API_KEY"
+          ],
+          envTemplate: [
+            "# Leave deterministic unless you explicitly want provider-backed extraction/summarization.",
+            "MEMORY_INTELLIGENCE_PROVIDER=deterministic",
+            "# MEMORY_INTELLIGENCE_PROVIDER=siliconflow",
+            "MEMORY_INTELLIGENCE_MODEL=deepseek-ai/DeepSeek-V4-Flash",
+            "SILICONFLOW_BASE_URL=https://api.siliconflow.cn/v1",
+            "SILICONFLOW_API_KEY="
+          ].join("\n"),
+          action: memoryIntelligence.reachable
+            ? "Memory extraction/summarization can use the configured intelligence provider; deterministic fallback remains available."
+            : "Set MEMORY_INTELLIGENCE_PROVIDER=deterministic, or configure SILICONFLOW_API_KEY for provider-backed extraction.",
+          docsHint: memoryIntelligence.degradedReason ?? `Current memory intelligence provider: ${memoryIntelligence.name}.`
         },
         {
           id: "speech-stt",

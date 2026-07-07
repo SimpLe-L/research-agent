@@ -2,6 +2,7 @@ import { BadRequestException, Inject, Injectable, NotFoundException } from "@nes
 import { findCapability, getExtensionManifest, getExtensionRuntimeStatus } from "@sp-agent/extensions";
 import { getSpeechStatus } from "@sp-agent/speech";
 import {
+  consolidateMemorySchema,
   createMemoryCandidateSchema,
   localBookmarkConnectorFileSchema,
   localBookmarkSearchSchema,
@@ -98,6 +99,12 @@ export class ExtensionsService {
           if (!approval.approved) return approval.response;
           return this.completed("local.memory", "memory.merge", audit, await this.memoryService.merge(mergeMemorySchema.parse(request.input)));
         }
+      },
+      {
+        extensionId: "local.memory",
+        capabilityId: "memory.consolidate",
+        handle: async (request, audit) =>
+          this.completed("local.memory", "memory.consolidate", audit, await this.memoryService.consolidate(consolidateMemorySchema.parse(request.input ?? {})))
       },
       {
         extensionId: "local.context",

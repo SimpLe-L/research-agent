@@ -6,7 +6,7 @@ import {
   streamPersonalAgentTurnWithAgent
 } from "@sp-agent/agent-runtime";
 import type { PersonalAgentExtensionInvokeRequest, PersonalAgentTurnInput, PersonalAgentTurnResult } from "@sp-agent/agent-runtime";
-import type { AgentMessageResponse, AgentShellStatus, CreateAgentMessageInput } from "@sp-agent/shared";
+import type { AgentMessageResponse, AgentShellStatus, CreateAgentMessageInput, MemorySearchResult } from "@sp-agent/shared";
 import { ChatService } from "./chat.service.js";
 import { ExtensionsService, isReadOnlyExtensionCapability } from "./extensions.service.js";
 import { MemoryService } from "./memory.service.js";
@@ -40,7 +40,7 @@ export class AgentShellService {
   async runMessage(input: CreateAgentMessageInput, metadata: Record<string, unknown> = { source: "agent.messages" }): Promise<AgentMessageResponse> {
     const prepared = await this.prepareTurn(input, metadata);
     const result = await runPersonalAgentTurnWithAgent(prepared.turnInput);
-    await this.persistAssistantMessage(prepared.sessionId, result, prepared.memoryContext.length, metadata);
+    await this.persistAssistantMessage(prepared.sessionId, result, prepared.memoryContext, metadata);
 
     return {
       sessionId: prepared.sessionId,
@@ -67,7 +67,7 @@ export class AgentShellService {
         yield event;
         continue;
       }
-      await this.persistAssistantMessage(prepared.sessionId, event.result, prepared.memoryContext.length, metadata);
+      await this.persistAssistantMessage(prepared.sessionId, event.result, prepared.memoryContext, metadata);
       yield {
         type: "done",
         sessionId: prepared.sessionId,
@@ -148,7 +148,7 @@ export class AgentShellService {
     }
   }
 
-  private async persistAssistantMessage(sessionId: string, result: PersonalAgentTurnResult, memoryContextCount: number, metadata: Record<string, unknown>) {
+  private async persistAssistantMessage(sessionId: string, result: PersonalAgentTurnResult, memoryContext: MemorySearchResult[], metadata: Record<string, unknown>) {
     await this.chatService.createMessage(sessionId, {
       role: "assistant",
       content: result.content,
@@ -157,7 +157,8 @@ export class AgentShellService {
         provider: result.provider,
         model: result.model,
         degradedReason: result.degradedReason,
-        memoryContextCount,
+        memoryContextCount: memoryContext.length,
+        memoryContextDebug: memoryContext.map(toMemoryContextDebug),
         activeTools: result.activeTools ?? [],
         toolCalls: result.toolCalls ?? []
       }
@@ -169,4 +170,16 @@ function makeSessionTitle(content: string) {
   const clean = content.replace(/\s+/g, " ").trim();
   if (!clean) return "New Chat";
   return clean.length > 40 ? `${clean.slice(0, 40)}...` : clean;
+}
+
+function toMemoryContextDebug(memory: MemorySearchResult) {
+  return {
+    memoryId: memory.entry.id,
+    kind: memory.entry.kind,
+    score: memory.score,
+    matchedTerms: memory.matchedTerms,
+    rankingSignals: memory.rankingSignals,
+    citation: memory.citation,
+    debug: memory.debug
+  };
 }

@@ -120,6 +120,26 @@ export const createMemoryCandidateSchema = z.object({
 });
 export type CreateMemoryCandidateInput = z.infer<typeof createMemoryCandidateSchema>;
 
+export const extractMemoryFromSessionSchema = z.object({
+  sessionId: z.string().min(1),
+  includeAssistant: z.boolean().default(false),
+  maxCandidates: z.coerce.number().int().positive().max(20).default(8)
+});
+export type ExtractMemoryFromSessionInput = z.infer<typeof extractMemoryFromSessionSchema>;
+
+export const summarizeMemorySessionSchema = z.object({
+  sessionId: z.string().min(1),
+  maxMessages: z.coerce.number().int().positive().max(80).default(30)
+});
+export type SummarizeMemorySessionInput = z.infer<typeof summarizeMemorySessionSchema>;
+
+export const consolidateMemorySchema = z.object({
+  statuses: z.array(z.enum(["candidate", "active"])).default(["candidate", "active"]),
+  maxSuggestions: z.coerce.number().int().positive().max(20).default(8),
+  includeSensitive: z.coerce.boolean().default(false)
+});
+export type ConsolidateMemoryInput = z.infer<typeof consolidateMemorySchema>;
+
 export const searchMemorySchema = z.object({
   query: z.string().min(1),
   strategy: z.enum(["auto", "core_semantic", "journal_temporal", "hybrid"]).default("auto"),
@@ -141,7 +161,27 @@ export const memorySearchResultSchema = z.object({
   entry: memoryEntrySchema,
   score: z.number(),
   matchedTerms: z.array(z.string()).default([]),
-  rankingSignals: z.array(z.string()).default([])
+  rankingSignals: z.array(z.string()).default([]),
+  sourceSnippet: z.string().optional(),
+  citation: z.object({
+    memoryId: z.string(),
+    sourceType: z.string(),
+    sourceId: z.string().optional(),
+    sourceLabel: z.string().optional(),
+    sessionId: z.string().optional(),
+    messageId: z.string().optional(),
+    occurredAt: z.string().optional(),
+    createdAt: z.string(),
+    snippet: z.string()
+  }).optional(),
+  debug: z.object({
+    strategy: z.enum(["core_semantic", "journal_temporal", "hybrid"]).optional(),
+    score: z.number(),
+    matchedTermCount: z.number(),
+    rankingSignals: z.array(z.string()).default([]),
+    vectorScore: z.number().optional(),
+    temporalWindow: z.boolean().optional()
+  }).optional()
 });
 export type MemorySearchResult = z.infer<typeof memorySearchResultSchema>;
 
@@ -172,6 +212,19 @@ export const mergeMemorySchema = z.object({
   tags: z.array(z.string()).default([])
 });
 export type MergeMemoryInput = z.infer<typeof mergeMemorySchema>;
+
+export const memoryConsolidationSuggestionSchema = z.object({
+  sourceIds: z.array(z.string()).min(2),
+  content: z.string().min(1),
+  kind: memoryKindSchema.default("core"),
+  reason: z.string().min(1),
+  confidence: z.number().min(0).max(1).default(0.8),
+  sensitivity: memorySensitivitySchema.default("normal"),
+  occurredAt: z.string().optional(),
+  tags: z.array(z.string()).default([]),
+  conflictReason: z.string().optional()
+});
+export type MemoryConsolidationSuggestion = z.infer<typeof memoryConsolidationSuggestionSchema>;
 
 export const memoryAuditEventSchema = z.object({
   id: z.string(),

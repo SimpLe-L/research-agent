@@ -30,7 +30,14 @@ const requiredBundleMarkers = [
   "extension-count",
   "approval-review-button",
   "approval-review-panel",
-  "approval-list"
+  "approval-list",
+  "memory-review-button",
+  "memory-review-panel",
+  "memory-list",
+  "memory-merge-start",
+  "memory-merge-panel",
+  "memory-edit-panel",
+  "memory-provenance"
 ];
 
 let previewProcess;

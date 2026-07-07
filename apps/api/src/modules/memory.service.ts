@@ -1,14 +1,20 @@
 import { Inject, Injectable, NotFoundException } from "@nestjs/common";
 import type {
+  ConsolidateMemoryInput,
   CreateMemoryCandidateInput,
+  ExtractMemoryFromSessionInput,
   MemoryAuditEvent,
   MemoryEntry,
+  MemorySearchResult,
   MergeMemoryInput,
   PromoteMemoryInput,
   SearchMemoryInput,
+  SummarizeMemorySessionInput,
   UpdateMemoryInput
 } from "@sp-agent/shared";
+import { ChatService } from "./chat.service.js";
 import { LocalJsonStore } from "./local-json-store.service.js";
+import { MemoryIntelligenceService } from "./memory-intelligence.service.js";
 import { MemoryVectorService, type MemoryVectorHit } from "./memory-vector.service.js";
 
 type MemoryFile = {
@@ -16,12 +22,7 @@ type MemoryFile = {
   auditEvents: MemoryAuditEvent[];
 };
 
-type ScoredMemory = {
-  entry: MemoryEntry;
-  score: number;
-  matchedTerms: string[];
-  rankingSignals: string[];
-};
+type ScoredMemory = MemorySearchResult;
 
 const VECTOR_MATCH_THRESHOLD = 0.65;
 
@@ -29,6 +30,8 @@ const VECTOR_MATCH_THRESHOLD = 0.65;
 export class MemoryService {
   constructor(
     @Inject(LocalJsonStore) private readonly store: LocalJsonStore,
+    @Inject(ChatService) private readonly chatService: ChatService,
+    @Inject(MemoryIntelligenceService) private readonly intelligenceService: MemoryIntelligenceService,
     @Inject(MemoryVectorService) private readonly vectorService: MemoryVectorService
   ) {}
 
@@ -80,6 +83,62 @@ export class MemoryService {
       memoryId: entry.id,
       memory: entry,
       conflicts
+    };
+  }
+
+  async extractFromSession(input: ExtractMemoryFromSessionInput) {
+    const session = await this.chatService.getSession(input.sessionId);
+    if (!session) throw new NotFoundException(`Chat session ${input.sessionId} not found`);
+    const messages = (session.messages ?? [])
+      .filter((message) => message.role === "user" || (input.includeAssistant && message.role === "assistant"))
+      .filter((message) => message.content.trim().length >= 8);
+    const extracted = await this.intelligenceService.extractCandidates(messages, input.maxCandidates);
+    const created = [];
+    for (const candidate of extracted.value) {
+      created.push(await this.createCandidate(candidate));
+    }
+    return {
+      sessionId: input.sessionId,
+      accepted: created.length,
+      memories: created.map((item) => item.memory),
+      provider: extracted.provider,
+      degradedReason: extracted.degradedReason
+    };
+  }
+
+  async summarizeSession(input: SummarizeMemorySessionInput) {
+    const session = await this.chatService.getSession(input.sessionId);
+    if (!session) throw new NotFoundException(`Chat session ${input.sessionId} not found`);
+    const messages = (session.messages ?? []).slice(-input.maxMessages);
+    if (messages.length === 0) {
+      return {
+        sessionId: input.sessionId,
+        accepted: false,
+        degradedReason: "Chat session has no messages to summarize."
+      };
+    }
+    const summary = await this.intelligenceService.summarizeSession(input.sessionId, messages);
+    const created = await this.createCandidate(summary.value);
+    return {
+      sessionId: input.sessionId,
+      accepted: true,
+      memoryId: created.memoryId,
+      memory: created.memory,
+      provider: summary.provider,
+      degradedReason: summary.degradedReason
+    };
+  }
+
+  async consolidate(input: ConsolidateMemoryInput) {
+    const file = await this.readFile();
+    const memories = file.memories
+      .filter((entry) => input.statuses.includes(entry.status as "candidate" | "active"))
+      .filter((entry) => input.includeSensitive || entry.sensitivity !== "sensitive");
+    const suggestions = this.intelligenceService.suggestConsolidations(memories, input.maxSuggestions);
+    return {
+      provider: suggestions.provider,
+      suggestions: suggestions.value,
+      degradedReason: suggestions.degradedReason
     };
   }
 
@@ -156,10 +215,11 @@ export class MemoryService {
 
   async search(input: SearchMemoryInput) {
     const terms = tokenize(input.query);
-    const fromMs = parseOptionalTime(input.from);
-    const toMs = parseOptionalTime(input.to);
+    const relativeWindow = resolveRelativeTimeWindow(input.query);
+    const fromMs = parseOptionalTime(input.from) ?? relativeWindow?.fromMs;
+    const toMs = parseOptionalTime(input.to) ?? relativeWindow?.toMs;
     const statuses = input.statuses ?? ["candidate", "active"];
-    const strategy = resolveSearchStrategy(input);
+    const strategy = resolveSearchStrategy(input, relativeWindow !== undefined);
     const vectorHits = await this.vectorHits(input, strategy, fromMs, toMs);
     const candidates = (await this.readFile()).memories
       .filter((entry) => statuses.includes(entry.status))
@@ -252,9 +312,9 @@ function makeAuditEvent(memoryId: string, action: MemoryAuditEvent["action"], re
   };
 }
 
-function resolveSearchStrategy(input: SearchMemoryInput) {
+function resolveSearchStrategy(input: SearchMemoryInput, hasRelativeTimeWindow = false) {
   if (input.strategy !== "auto") return input.strategy;
-  if (input.kind === "journal" || input.from || input.to) return "journal_temporal";
+  if (input.kind === "journal" || input.from || input.to || hasRelativeTimeWindow) return "journal_temporal";
   if (input.kind === "core") return "core_semantic";
   return "hybrid";
 }
@@ -274,7 +334,8 @@ function rankByStrategy(
       terms,
       input.query,
       false,
-      vectorHits
+      vectorHits,
+      "core_semantic"
     );
   }
 
@@ -286,7 +347,8 @@ function rankByStrategy(
       terms,
       input.query,
       true,
-      vectorHits
+      vectorHits,
+      "journal_temporal"
     );
   }
 
@@ -295,21 +357,30 @@ function rankByStrategy(
     terms,
     input.query,
     false,
-    vectorHits
+    vectorHits,
+    "hybrid"
   );
   const journal = rankEntries(
     entries.filter((entry) => matchesKind(entry, input.kind, ["journal", "summary"])),
     terms,
     input.query,
     false,
-    vectorHits
+    vectorHits,
+    "hybrid"
   );
   return mergeRankedByQuota(core, journal, input.limit);
 }
 
-function rankEntries(entries: MemoryEntry[], terms: string[], query: string, temporalSearch: boolean, vectorHits: Map<string, MemoryVectorHit>) {
+function rankEntries(
+  entries: MemoryEntry[],
+  terms: string[],
+  query: string,
+  temporalSearch: boolean,
+  vectorHits: Map<string, MemoryVectorHit>,
+  strategy: "core_semantic" | "journal_temporal" | "hybrid"
+) {
   return entries
-    .map((entry) => scoreMemory(entry, terms, query, temporalSearch, vectorHits.get(entry.id)))
+    .map((entry) => scoreMemory(entry, terms, query, temporalSearch, vectorHits.get(entry.id), strategy))
     .filter((result) => result.score > 0)
     .sort((a, b) => b.score - a.score || b.entry.updatedAt.localeCompare(a.entry.updatedAt));
 }
@@ -338,7 +409,14 @@ function pushRanked(target: ScoredMemory[], seen: Set<string>, items: ScoredMemo
   }
 }
 
-function scoreMemory(entry: MemoryEntry, terms: string[], query: string, temporalSearch = false, vectorHit?: MemoryVectorHit): ScoredMemory {
+function scoreMemory(
+  entry: MemoryEntry,
+  terms: string[],
+  query: string,
+  temporalSearch = false,
+  vectorHit: MemoryVectorHit | undefined,
+  strategy: "core_semantic" | "journal_temporal" | "hybrid"
+): ScoredMemory {
   const haystack = `${entry.content} ${entry.tags.join(" ")} ${entry.source.label ?? ""}`.toLowerCase();
   const content = entry.content.toLowerCase();
   const tags = entry.tags.map((tag) => tag.toLowerCase());
@@ -346,7 +424,9 @@ function scoreMemory(entry: MemoryEntry, terms: string[], query: string, tempora
   const normalizedQuery = query.toLowerCase().trim();
   const matchedTerms = terms.filter((term) => haystack.includes(term));
   const strongVectorHit = vectorHit && (vectorHit.score >= VECTOR_MATCH_THRESHOLD || matchedTerms.length > 0 || temporalSearch) ? vectorHit : undefined;
-  if (matchedTerms.length === 0 && !temporalSearch && !strongVectorHit) return { entry, score: 0, matchedTerms: [], rankingSignals: [] };
+  if (matchedTerms.length === 0 && !temporalSearch && !strongVectorHit) {
+    return hydrateSearchResult(entry, 0, [], [], terms, strategy, vectorHit, temporalSearch);
+  }
 
   const rankingSignals: string[] = [];
   let score = temporalSearch ? 1.5 : 0;
@@ -407,7 +487,81 @@ function scoreMemory(entry: MemoryEntry, terms: string[], query: string, tempora
     rankingSignals.push("recency");
   }
 
-  return { entry, score: Number(score.toFixed(4)), matchedTerms: Array.from(new Set(matchedTerms)), rankingSignals: Array.from(new Set(rankingSignals)) };
+  return hydrateSearchResult(
+    entry,
+    Number(score.toFixed(4)),
+    Array.from(new Set(matchedTerms)),
+    Array.from(new Set(rankingSignals)),
+    terms,
+    strategy,
+    strongVectorHit,
+    temporalSearch
+  );
+}
+
+function hydrateSearchResult(
+  entry: MemoryEntry,
+  score: number,
+  matchedTerms: string[],
+  rankingSignals: string[],
+  queryTerms: string[],
+  strategy: "core_semantic" | "journal_temporal" | "hybrid",
+  vectorHit: MemoryVectorHit | undefined,
+  temporalSearch: boolean
+): ScoredMemory {
+  const sourceSnippet = buildSourceSnippet(entry.content, matchedTerms.length > 0 ? matchedTerms : queryTerms);
+  return {
+    entry,
+    score,
+    matchedTerms,
+    rankingSignals,
+    sourceSnippet,
+    citation: buildMemoryCitation(entry, sourceSnippet),
+    debug: {
+      strategy,
+      score,
+      matchedTermCount: matchedTerms.length,
+      rankingSignals,
+      vectorScore: vectorHit?.score,
+      temporalWindow: temporalSearch || undefined
+    }
+  };
+}
+
+function buildMemoryCitation(entry: MemoryEntry, snippet: string) {
+  return {
+    memoryId: entry.id,
+    sourceType: entry.source.type,
+    sourceId: entry.source.id,
+    sourceLabel: entry.source.label,
+    sessionId: entry.sessionId ?? stringFromRecord(entry.provenance, "sessionId"),
+    messageId: stringFromRecord(entry.provenance, "messageId"),
+    occurredAt: entry.occurredAt,
+    createdAt: entry.createdAt,
+    snippet
+  };
+}
+
+function buildSourceSnippet(content: string, terms: string[]) {
+  const normalized = content.replace(/\s+/g, " ").trim();
+  if (normalized.length <= 180) return normalized;
+  const lower = normalized.toLowerCase();
+  const firstHit = terms
+    .map((term) => lower.indexOf(term.toLowerCase()))
+    .filter((index) => index >= 0)
+    .sort((a, b) => a - b)
+    .at(0);
+  const center = firstHit ?? 0;
+  const start = Math.max(0, center - 70);
+  const end = Math.min(normalized.length, start + 180);
+  const prefix = start > 0 ? "..." : "";
+  const suffix = end < normalized.length ? "..." : "";
+  return `${prefix}${normalized.slice(start, end)}${suffix}`;
+}
+
+function stringFromRecord(record: Record<string, unknown>, key: string) {
+  const value = record[key];
+  return typeof value === "string" ? value : undefined;
 }
 
 function parseOptionalTime(value: string | undefined) {
@@ -495,4 +649,44 @@ function countOccurrences(value: string, term: string) {
     index = value.indexOf(term, index + term.length);
   }
   return count;
+}
+
+function resolveRelativeTimeWindow(query: string) {
+  const normalized = query.toLowerCase();
+  const now = new Date();
+  if (/昨天|yesterday/.test(normalized)) return dayWindow(addDays(startOfLocalDay(now), -1));
+  if (/今天|today/.test(normalized)) return dayWindow(startOfLocalDay(now));
+  if (/前天|day before yesterday/.test(normalized)) return dayWindow(addDays(startOfLocalDay(now), -2));
+  if (/上周|last week/.test(normalized)) {
+    const startThisWeek = startOfLocalWeek(now);
+    return { fromMs: addDays(startThisWeek, -7).getTime(), toMs: startThisWeek.getTime() - 1 };
+  }
+  if (/本周|this week/.test(normalized)) {
+    const startThisWeek = startOfLocalWeek(now);
+    return { fromMs: startThisWeek.getTime(), toMs: addDays(startThisWeek, 7).getTime() - 1 };
+  }
+  return undefined;
+}
+
+function dayWindow(dayStart: Date) {
+  return {
+    fromMs: dayStart.getTime(),
+    toMs: addDays(dayStart, 1).getTime() - 1
+  };
+}
+
+function startOfLocalDay(value: Date) {
+  return new Date(value.getFullYear(), value.getMonth(), value.getDate());
+}
+
+function startOfLocalWeek(value: Date) {
+  const day = startOfLocalDay(value);
+  const mondayOffset = (day.getDay() + 6) % 7;
+  return addDays(day, -mondayOffset);
+}
+
+function addDays(value: Date, days: number) {
+  const next = new Date(value);
+  next.setDate(next.getDate() + days);
+  return next;
 }

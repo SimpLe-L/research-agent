@@ -86,9 +86,9 @@ textarea {
   font: inherit;
 }
 
-button {
+/* button {
   border: 0;
-}
+} */
 
 h1,
 p {
@@ -379,6 +379,7 @@ p {
 }
 
 @keyframes thinkingDotPulse {
+
   0%,
   100% {
     opacity: 0.28;
@@ -425,6 +426,7 @@ p {
 }
 
 @media (prefers-reduced-motion: reduce) {
+
   .thinkingGlyph span,
   .voiceAvatar span {
     animation: none;

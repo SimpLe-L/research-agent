@@ -11,6 +11,7 @@ import { HealthController } from "./health.controller.js";
 import { LocalJsonStore } from "./local-json-store.service.js";
 import { MemoryController } from "./memory.controller.js";
 import { MemoryEmbeddingService } from "./memory-embedding.service.js";
+import { MemoryIntelligenceService } from "./memory-intelligence.service.js";
 import { MemoryService } from "./memory.service.js";
 import { MemoryVectorService } from "./memory-vector.service.js";
 import { ProvidersController } from "./providers.controller.js";
@@ -40,6 +41,7 @@ import { WorkflowsService } from "./workflows.service.js";
     SettingsService,
     ChatService,
     MemoryService,
+    MemoryIntelligenceService,
     MemoryEmbeddingService,
     MemoryVectorService,
     AgentShellService,

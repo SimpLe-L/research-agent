@@ -46,6 +46,8 @@ Old Web3/research code has been removed from the active project. Do not restore 
 - Prefer small, typed modules with Zod schemas in `packages/shared`.
 - Update `PROCESS.md` after completing meaningful implementation steps.
 - Keep `ARCHITECTURE.md` aligned whenever package boundaries, runtime processes, speech/memory contracts, or skill boundaries change.
+- For renderer UI, prefer existing shadcn/base UI components and Tailwind utility classes first. Keep `styles.css` limited to Tailwind/shadcn setup, theme tokens, global resets, and genuinely shared or hard-to-express surfaces; do not grow it with one-off component styling when component-level Tailwind classes or shadcn primitives fit.
+- Be selective with smoke tests. Run smoke tests for critical/high-risk behavior, API contracts, persistence, runtime/provider boundaries, workflow/memory/speech logic, Electron startup, or changes that could silently break core paths. For routine UI tweaks, low-risk component styling, copy changes, and documentation-only edits, avoid smoke tests unless there is a concrete regression risk; use lighter checks only when they add clear value.
 - When adding a capability, register it in `packages/extensions` before making it a first-class agent skill.
 - Extension invocations must return `permissionAudit`.
 - Pi-triggered extension calls may only execute read-only/search capabilities until a broader permission model is designed. `memory.write_candidate` is API-callable, but its audit mode is `write_or_provider`, so the agent must not auto-call it.

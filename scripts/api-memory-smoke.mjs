@@ -6,6 +6,10 @@ import { spawn } from "node:child_process";
 const port = Number(process.env.SMOKE_API_PORT ?? 4400 + Math.floor(Math.random() * 1000));
 const baseUrl = process.env.SMOKE_API_BASE ?? `http://127.0.0.1:${port}/api`;
 const dataDir = await mkdtemp(join(tmpdir(), "sp-agent-memory-smoke-"));
+const yesterday = startOfDay(addDays(new Date(), -1));
+const yesterdayStart = yesterday.toISOString();
+const yesterdayEnd = new Date(addDays(yesterday, 1).getTime() - 1).toISOString();
+const yesterdayJournalAt = new Date(yesterday.getTime() + 8 * 60 * 60 * 1000 + 30 * 60 * 1000).toISOString();
 let apiProcess;
 
 try {
@@ -30,6 +34,15 @@ try {
     role: "user",
     content: "我喜欢用本地优先的个人助手。"
   });
+  await post(`${baseUrl}/chat/sessions/${session.id}/messages`, {
+    role: "user",
+    content: "请记住我喜欢极简语音界面。"
+  });
+  await post(`${baseUrl}/chat/sessions/${session.id}/messages`, {
+    role: "user",
+    content: "昨天我们用语音讨论了 Memory v2 的 journal 时间检索。",
+    metadata: { source: "voice", sttProvider: "deterministic", audioPersisted: false }
+  });
 
   const created = await post(`${baseUrl}/memory/candidates`, {
     content: "用户偏好本地优先的个人助手架构。",
@@ -50,6 +63,9 @@ try {
   assert(search.memories.length === 1, "memory search should find the created entry");
   assert(search.memories[0].matchedTerms?.length >= 1, "memory search should expose matched terms");
   assert(search.memories[0].rankingSignals?.includes("content_match"), "memory search should expose ranking signals");
+  assert(search.memories[0].sourceSnippet?.includes("本地优先"), "memory search should expose a source snippet");
+  assert(search.memories[0].citation?.memoryId === created.memoryId, "memory search should expose memory citation");
+  assert(search.memories[0].debug?.strategy === "hybrid", "memory search should expose retrieval debug metadata");
 
   const promoted = await post(`${baseUrl}/memory/${created.memoryId}/promote`, {
     reason: "smoke accepted durable fact"
@@ -64,18 +80,59 @@ try {
     source: { type: "voice", id: session.id, label: "voice transcript" },
     provenance: { source: "voice", sttProvider: "deterministic", audioPersisted: false },
     confidence: 0.75,
-    occurredAt: "2026-07-05T08:30:00.000Z",
+    occurredAt: yesterdayJournalAt,
     tags: ["voice", "journal", "memory"]
   });
   await post(`${baseUrl}/memory/${journal.memoryId}/promote`, {
     reason: "smoke accepted voice journal event"
   });
   const temporalSearch = await get(
-    `${baseUrl}/memory/search?query=${encodeURIComponent("昨天")}&kind=journal&from=${encodeURIComponent("2026-07-05T00:00:00.000Z")}&to=${encodeURIComponent("2026-07-05T23:59:59.999Z")}&sessionId=${encodeURIComponent(session.id)}`
+    `${baseUrl}/memory/search?query=${encodeURIComponent("昨天")}&kind=journal&from=${encodeURIComponent(yesterdayStart)}&to=${encodeURIComponent(yesterdayEnd)}&sessionId=${encodeURIComponent(session.id)}`
   );
   assert(temporalSearch.memories.length === 1, "temporal journal search should find the journal entry");
   assert(temporalSearch.memories[0].rankingSignals.includes("temporal_window"), "temporal journal search should expose temporal window signal");
   assert(temporalSearch.memories[0].rankingSignals.includes("journal_temporal"), "temporal journal search should use journal temporal ranking");
+  const relativeTemporalSearch = await get(`${baseUrl}/memory/search?query=${encodeURIComponent("昨天讨论了什么")}&kind=journal&sessionId=${encodeURIComponent(session.id)}`);
+  assert(relativeTemporalSearch.memories.length >= 1, "relative temporal query should infer yesterday window");
+  assert(relativeTemporalSearch.memories[0].rankingSignals.includes("temporal_window"), "relative temporal query should expose temporal window signal");
+
+  const extracted = await post(`${baseUrl}/memory/extract/session`, {
+    sessionId: session.id,
+    maxCandidates: 6
+  });
+  assert(extracted.accepted >= 2, "session extraction should create memory candidates");
+  assert(extracted.memories.some((memory) => memory.kind === "core"), "session extraction should create core memory for explicit preference");
+  const extractedVoice = extracted.memories.find((memory) => memory.source.type === "voice");
+  assert(extractedVoice, "session extraction should preserve voice source");
+  assert(extractedVoice.provenance.sttProvider === "deterministic", "voice extraction should preserve stt provider provenance");
+  assert(extractedVoice.provenance.audioPersisted === false, "voice extraction should preserve audio non-persistence provenance");
+
+  const sessionSummary = await post(`${baseUrl}/memory/summaries/session`, {
+    sessionId: session.id,
+    maxMessages: 10
+  });
+  assert(sessionSummary.accepted === true, "session summary should create a memory candidate");
+  assert(sessionSummary.memory.kind === "summary", "session summary should use summary memory kind");
+  assert(sessionSummary.memory.provenance.sourceMessageIds.length >= 1, "session summary should preserve source message ids");
+  assert(sessionSummary.provider === "deterministic", "session summary should expose the memory intelligence provider");
+
+  await post(`${baseUrl}/memory/candidates`, {
+    content: "用户喜欢本地优先的个人助手架构和可审计记忆。",
+    kind: "core",
+    scope: "session",
+    sessionId: session.id,
+    source: { type: "user", id: session.id, label: "memory smoke duplicate" },
+    provenance: { smoke: true, duplicate: true },
+    confidence: 0.82,
+    tags: ["preference", "architecture"]
+  });
+  const consolidation = await post(`${baseUrl}/memory/consolidate`, {
+    statuses: ["candidate", "active"],
+    maxSuggestions: 5
+  });
+  assert(consolidation.provider === "deterministic", "memory consolidation should expose provider");
+  assert(consolidation.suggestions.length >= 1, "memory consolidation should suggest related memories");
+  assert(consolidation.suggestions[0].sourceIds.length >= 2, "memory consolidation suggestion should include source ids");
 
   const coreOnlySearch = await get(`${baseUrl}/memory/search?query=${encodeURIComponent("本地优先")}&strategy=core_semantic&sessionId=${encodeURIComponent(session.id)}`);
   assert(coreOnlySearch.memories.length >= 1, "core semantic search should find core memories");
@@ -156,6 +213,8 @@ try {
   assert(agentTurn.memoryContext.length >= 1, "agent turn should retrieve relevant memory context");
   assert(agentTurn.memoryContext.every((item) => item.entry.status === "active"), "agent retrieval gate should only expose active memories");
   assert(agentTurn.memoryContext.every((item) => item.entry.sensitivity !== "sensitive"), "agent retrieval gate should exclude sensitive memories");
+  assert(agentTurn.memoryContext.every((item) => item.citation?.memoryId), "agent memory context should expose citations");
+  assert(agentTurn.memoryContext.every((item) => item.debug?.strategy), "agent memory context should expose debug strategy");
 
   const writeAudit = await post(`${baseUrl}/extensions/local.memory/invoke`, {
     capabilityId: "memory.write_candidate",
@@ -179,8 +238,8 @@ try {
   assert(approvedWrite.status === "completed", "approved memory write should complete");
 
   await del(`${baseUrl}/memory/${merged.memory.id}`);
-  const afterDelete = await get(`${baseUrl}/memory/search?query=${encodeURIComponent("本地优先")}&sessionId=${session.id}`);
-  assert(afterDelete.memories.length === 0, "tombstoned memory should not appear in search");
+  const afterDelete = await get(`${baseUrl}/memory/search?query=${encodeURIComponent("本地优先")}&sessionId=${session.id}&statuses=active`);
+  assert(afterDelete.memories.every((item) => item.entry.id !== merged.memory.id), "tombstoned memory should not appear in active search");
 
   console.log("api memory smoke passed", {
     sessionId: session.id,
@@ -226,6 +285,16 @@ async function patch(url, body) {
     body: JSON.stringify(body)
   });
   return readJson(response, url);
+}
+
+function startOfDay(value) {
+  return new Date(value.getFullYear(), value.getMonth(), value.getDate());
+}
+
+function addDays(value, days) {
+  const next = new Date(value);
+  next.setDate(next.getDate() + days);
+  return next;
 }
 
 async function del(url) {

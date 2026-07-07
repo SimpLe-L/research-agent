@@ -136,14 +136,184 @@ Complete when:
 - Memory v2 should add temporal search, retrieval gating, and an explicit retrieval strategy layer before expanding into embeddings or external memory frameworks. `mem0`-style engines may be introduced later only as memory extraction/retrieval adapters behind the app-owned schema, approval, provenance, and audit model.
 - LanceDB is the first optional Memory v2 vector backend. Keep it local-first under `MEMORY_LANCEDB_URI` or `SP_AGENT_DATA_DIR/lancedb`; SiliconFlow `BAAI/bge-m3` is the first real embedding provider, with deterministic embeddings retained for smoke/offline development when no `SILICONFLOW_API_KEY` is configured or `MEMORY_EMBEDDING_PROVIDER=deterministic` is set.
 
+## Active Priority Order
+
+The next development work should be sequenced in this order. Do not let lower-priority tracks expand before the higher-priority track has a usable product surface.
+
+1. Memory system completion.
+2. Memory review UI in the desktop shell.
+3. Skills and workflow capability expansion.
+4. Voice optimization and interruptible conversation.
+
+### Priority 1: Memory System Completion
+
+Goal:
+
+- Make memory the first complete product capability, not just backend infrastructure.
+- Preserve the two-layer memory model inspired by voice-chat memory systems such as MoeChat: Core Memory for stable user facts/preferences and Journal/long-term memory for time-addressable events and conversation history.
+- Keep memory API-owned, searchable, auditable, reversible, and safe to expose to runtimes only through typed tools.
+
+Current status:
+
+- Backend Memory v2 already supports typed kinds: `core`, `journal`, `summary`, `procedural`, and `project`.
+- Temporal fields and query filters exist through `occurredAt`, `from`, `to`, and retrieval strategies.
+- SiliconFlow `BAAI/bge-m3` embeddings and optional LanceDB vector indexing exist, with deterministic fallback.
+- Memory promotion, update, merge, conflict metadata, forget/tombstone, matched terms, ranking signals, and audit foundations exist.
+- Core/Journal behavior is now explicit in backend retrieval: core/project/procedural memories use semantic-confidence ranking, journal/summary memories support temporal windows, and hybrid retrieval combines both layers.
+- Journal search can infer basic relative time windows from query text such as `昨天`, `今天`, `上周`, `yesterday`, and `last week`.
+- API endpoints exist to extract memory candidates from chat/voice sessions and to create inspectable session summary candidates.
+- Voice-derived memory candidates preserve `source: voice`, `sttProvider`, `audioPersisted: false`, `sessionId`, and source message provenance.
+- Memory search and agent retrieval now expose source snippets, citations, and lightweight retrieval debug metadata for user review and future agent-turn diagnostics.
+- Memory extraction and session summarization now run through an API-owned memory intelligence boundary. The default provider is deterministic/rule-based; `MEMORY_INTELLIGENCE_PROVIDER=siliconflow` can enable optional LLM-backed extraction/summarization when explicitly configured.
+- Memory consolidation suggestions now inspect candidate/active memories and propose merge inputs without mutating durable memory. The user still has to review and execute merge.
+
+Remaining work:
+
+1. Add a user-facing memory review UI so extracted candidates and summaries can be inspected before promotion.
+2. Improve candidate extraction quality later with an optional LLM-backed extractor, while keeping rule-based extraction as the deterministic fallback. Done behind `MEMORY_INTELLIGENCE_PROVIDER=siliconflow`.
+3. Improve session summarization later with an optional LLM-backed summarizer, while keeping rule-based summaries inspectable. Done behind `MEMORY_INTELLIGENCE_PROVIDER=siliconflow`.
+4. Add richer memory source snippets/citations for user-facing search results and optional debug metadata for agent turns. Done.
+5. Add memory consolidation suggestions for duplicate/conflicting candidates while preserving user-reviewed merge. Done.
+
+Acceptance:
+
+- User can ask time-aware questions against journal memory, such as yesterday/last week/project-period style queries.
+- Agent turns can retrieve relevant active memory without auto-writing durable memory.
+- Memory candidates from voice/chat preserve source, provenance, sensitivity, and audit metadata.
+- Core Memory and Journal/Long-Term Memory have distinct retrieval behavior.
+
+### Priority 2: Memory Review UI
+
+Goal:
+
+- Add the missing desktop surface for memory inspection and control.
+- This is required for this project even if a reference project does not expose the same UI, because SP Agent treats durable memory as auditable and reversible user-owned data.
+
+Reference note:
+
+- MoeChat's README describes a Journal System for long-term memory with fuzzy time queries and a Core Memory system for key facts/preferences/personal memories.
+- The README does not clearly document a dedicated memory review UI. For SP Agent, build the review UI because the local-first permission model requires users to inspect, promote, edit, merge, and forget memories.
+
+Entry point:
+
+- Place the memory review entry in the renderer header beside the current extension/plugin count. Done.
+- Keep the entry compact: a memory icon/button plus a count or degraded indicator. Done for candidate count.
+- The panel can reuse the existing right-side sheet pattern used by approvals, but it should not be nested inside another card. Done for the first review panel.
+
+Required UI capabilities:
+
+1. Search memories by text, kind, status, time range, and sensitivity inclusion. Done for the first review panel.
+2. Show grouped memory kinds:
+   - Core
+   - Journal
+   - Summary
+   - Procedural
+   - Project
+   Done.
+3. Review memory candidates and promote them to active memory. Done.
+4. Edit memory content, kind, sensitivity, tags, and occurredAt. Done.
+5. Merge duplicate/conflicting memories and show conflict metadata. Done for selected memories in the first review panel.
+6. Forget/tombstone memories with visible audit state. Done with per-memory details and audit events.
+7. Show provenance: source type, session id, provider, created/updated/promoted/tombstoned timestamps. Done with an expandable details view.
+8. Extract memory candidates and create session summary candidates from the current chat session. Done.
+
+Acceptance:
+
+- Header exposes a memory review entry next to the extension/plugin count.
+- User can search, inspect, promote, update, merge, and forget memory without leaving the chat shell.
+- Candidate and active memory states are visually distinct.
+- Sensitive memories are excluded by default and require an explicit UI toggle.
+
+### Priority 3: Skills And Workflow Expansion
+
+Goal:
+
+- Expand skills only after memory is usable, so workflows can rely on stable context and memory behavior.
+- Keep skills behind `packages/extensions`, API-owned permissions, and observable workflow records.
+
+Remaining work:
+
+1. Add a skill catalog UI:
+   - active skills
+   - degraded skills
+   - readiness-gated skills
+   - permission level and audit mode
+2. Add one practical approval-gated write workflow:
+   - Recommended first candidate: `local.memory.suggest` -> review candidates -> approve promotion.
+   - Alternative: `local.tasks.create_candidate` behind approval.
+3. Add workflow detail UI:
+   - node events
+   - status
+   - retry
+   - cancel
+   - degraded reason
+4. Add higher-value read-only skills after memory UI exists:
+   - `local.project.plan`
+   - `local.bookmarks.digest`
+   - `local.context.briefing`
+5. Add LangGraph only when a skill truly needs graph orchestration.
+6. Harden workflow execution later with durable worker/cross-process recovery if local JSON + in-process execution becomes limiting.
+
+Acceptance:
+
+- User can see skill readiness and permission level in the desktop shell.
+- Agent can call read-only skills and request approval for write/provider actions.
+- Approved actions execute through API-owned handlers and produce permission audit records.
+- Long-running workflows expose truthful status, retry/cancel behavior, and degraded reasons.
+
+### Priority 4: Voice Optimization
+
+Goal:
+
+- Keep voice as a first-class interaction path, but optimize it after memory and skills are stronger.
+- Focus on latency, interruptibility, and deployable provider configuration.
+
+Remaining work:
+
+1. Add clearer voice states:
+   - listening
+   - transcribing
+   - thinking
+   - synthesizing
+   - speaking
+   - degraded
+2. Add provider settings UI:
+   - STT provider
+   - TTS provider
+   - endpoint
+   - model
+   - voice
+   - readiness check
+3. Keep self-hosted FunASR/GPT-SoVITS as optional advanced/private deployment tracks, not required Electron dependencies.
+4. Add interruptible voice:
+   - user can speak while assistant is playing
+   - playback stops
+   - current agent/TTS request is cancelled or ignored
+   - new STT turn starts cleanly
+5. Add streaming or chunked voice response:
+   - stream LLM output
+   - segment by sentence
+   - send chunks to TTS
+   - start playback before the full assistant response finishes
+6. Use timing instrumentation to compare provider latency and decide whether MiMo, MiniMax, GPT-SoVITS, or another provider should be the default.
+
+Acceptance:
+
+- Voice cannot open unless STT and TTS are configured and reachable.
+- User can interrupt assistant playback and start a new turn.
+- Time-to-first-audio improves compared with the current full-response-then-TTS path.
+- Voice provider setup is usable in packaged Electron without requiring end users to install local ML services.
+
 ## Current Gaps
 
-1. Graph-backed workflows are not implemented yet. Add LangGraph only when a skill truly needs graph orchestration, and keep it behind the extension boundary.
-2. Workflow runner remains local-JSON backed and in-process for execution; it now has async start and stale recovery, but durable cross-process workers are still future hardening.
-3. Connector boundary is implemented with `local.bookmarks`; additional real personal-service connectors still need per-connector permission and audit design.
-4. `local-deterministic` proves a second adapter path, but additional live provider adapters should wait for a real provider/use case.
-5. Memory v2 review UI is not implemented yet. The backend now exposes typed memory kinds, temporal search, provenance, sensitivity, retrieval gating, strategy selection, optional LanceDB vector reranking, and smoke coverage; the renderer can add a compact memory review surface for search, edit, merge, promote, and forget.
-6. Speech Phase 1 half-duplex shell is implemented with deterministic providers, renderer recording/playback UI, FunASR-compatible transcription, local GPT-SoVITS TTS, cloud MiniMax TTS, settings readiness, and voice audit events; live provider validation and settings UI remain.
+1. Memory remains the highest-priority product area, but the backend foundations, first review UI, optional LLM-backed extraction/summarization boundary, and consolidation suggestions are now usable. Remaining memory work should focus on evaluating extraction quality with real conversations and refining consolidation policy.
+2. Memory review UI exists beside the extension/plugin count with search, date filters, grouped kinds, candidate promotion, update, merge, forget, provenance, and audit details.
+3. Skills/workflows should wait until memory is usable, then expand through a skill catalog UI, approval-gated write workflow, workflow detail UI, and selected high-value read-only skills.
+4. Voice optimization is intentionally last. Phase 1 half-duplex voice works, but interruptible voice, streaming/chunked TTS, provider settings UI, and packaged deployment defaults remain future work.
+5. Graph-backed workflows are not implemented yet. Add LangGraph only when a skill truly needs graph orchestration, and keep it behind the extension boundary.
+6. Workflow runner remains local-JSON backed and in-process for execution; it now has async start and stale recovery, but durable cross-process workers are still future hardening.
+7. Connector boundary is implemented with `local.bookmarks`; additional real personal-service connectors still need per-connector permission and audit design.
+8. `local-deterministic` proves a second adapter path, but additional live provider adapters should wait for a real provider/use case.
 
 ## OpenClaw-Style Optimization Direction
 
@@ -237,7 +407,7 @@ Latest verification:
 
 ### Phase 3: Memory Layer
 
-Status: Memory v2 backend verified; review UI and optional external memory-engine adapters remain future work.
+Status: Memory v2 backend, first review UI, source snippets/citations, retrieval debug metadata, optional LLM-backed extraction/summarization boundary, and consolidation suggestions are implemented; external memory-engine adapters remain future work.
 
 Deliverables:
 
@@ -255,7 +425,14 @@ Deliverables:
 - Add `sensitivity` metadata and retrieval gating so agent turns receive only active, relevant, non-sensitive memory by default. Done.
 - Add retrieval strategies (`auto`, `core_semantic`, `journal_temporal`, `hybrid`) so journal search first narrows by time before relevance ranking, while agent retrieval uses hybrid kind quotas. Done.
 - Add optional LanceDB vector indexing and provider-backed reranking behind the retrieval strategy layer. Done with deterministic offline embeddings and SiliconFlow `BAAI/bge-m3` embeddings.
-- Preserve voice provenance (`source: voice`, `sttProvider`, `audioPersisted: false`) for memory candidates created from speech transcripts. Planned.
+- Add inferred relative-time journal search for `昨天`, `今天`, `上周`, `yesterday`, and `last week`. Done.
+- Add API extraction of memory candidates from chat/voice sessions with source-message provenance. Done with rule-based deterministic extraction.
+- Preserve voice provenance (`source: voice`, `sttProvider`, `audioPersisted: false`) for memory candidates created from speech transcripts. Done.
+- Add API session summary candidate creation using the `summary` memory kind. Done with rule-based deterministic summarization.
+- Add a desktop memory review panel for search, grouped kinds, promotion, editing, selected-memory merge, forget/tombstone, provenance, and audit inspection. Done.
+- Add source snippets, citations, and lightweight retrieval debug metadata to memory search results and agent memory context. Done.
+- Add API-owned memory intelligence boundary with deterministic fallback and optional SiliconFlow JSON extraction/summarization. Done.
+- Add read-only memory consolidation suggestions and wire the review UI to prefill a merge draft from the first suggestion. Done.
 - Keep external memory engines such as mem0 out of the control plane. They may later implement candidate extraction, consolidation, or semantic retrieval behind the Memory v2 service contract. Planned.
 
 Acceptance:
@@ -318,6 +495,82 @@ Acceptance:
 - `pnpm smoke:speech:live` skips unless `SPEECH_PROVIDER_LIVE_SMOKE=1`
 - Text chat still works through the same `/api/agent/messages` path.
 - Renderer can complete record -> transcript -> agent -> playback with one provider or explicit degraded reason.
+
+## Resume-Oriented Productization Plan
+
+The current project is a working local-first personal Agent OS base. To make it stronger as a resume project, productization should follow the same priority order as active development: memory first, memory UI second, skills/workflows third, voice optimization last.
+
+### Feature 1: Core And Journal Memory Assistant
+
+Resume angle:
+
+- "Built a two-layer long-term memory system for a local-first personal Agent, separating Core Memory for stable user facts/preferences from Journal Memory for time-addressable conversation events, with embedding retrieval, provenance, audit, and reversible lifecycle operations."
+
+Product outcome:
+
+- The agent can remember durable facts and time-based events, retrieve them safely during chat, and expose why a memory was used.
+
+Key work:
+
+- Strengthen Core vs Journal retrieval policy. Done for backend search/retrieval; product UI remains.
+- Add chat/voice memory candidate extraction. Done with rule-based API extraction; LLM-backed extraction remains optional future work.
+- Add session summarization into `summary` memory. Done with rule-based API summaries; LLM-backed summarization remains optional future work.
+- Preserve provenance, sensitivity, conflict metadata, and audit for all memory writes.
+- Support time-aware journal queries and hybrid retrieval. Done for explicit ranges and basic relative time phrases.
+
+### Feature 2: Memory Review UI
+
+Resume angle:
+
+- "Designed a desktop memory review surface that lets users inspect, search, promote, edit, merge, and forget AI memories, keeping durable personalization auditable and user-controlled."
+
+Product outcome:
+
+- The desktop shell has a visible memory entry beside the extension/plugin count, making memory a first-class product surface.
+
+Key work:
+
+- Add memory header entry next to the extension count.
+- Add search/filter by kind, status, time range, sensitivity, and text.
+- Add candidate review, promote, edit, merge, and forget/tombstone actions.
+- Show source/provenance and audit metadata.
+- Keep sensitive memory excluded unless the user explicitly opts in.
+
+### Feature 3: Permissioned Skills And Workflow Execution
+
+Resume angle:
+
+- "Built a permissioned skill and workflow system for a desktop Agent platform, separating model runtime decisions from privileged execution through an API-owned approval queue, extension registry, and auditable workflow runner."
+
+Product outcome:
+
+- After memory is usable, the agent can safely use local/project/personal skills without bypassing API-owned permissions.
+
+Key work:
+
+- Add a skill catalog UI for active/degraded/readiness-gated extensions.
+- Add one approval-gated write workflow, preferably memory candidate promotion or task candidate creation.
+- Add workflow detail UI for node events, retry, cancel, status, and degraded reason.
+- Add high-value read-only skills such as project planning, bookmark digest, and context briefing.
+- Introduce LangGraph only when a real skill needs graph orchestration.
+
+### Feature 4: Voice Optimization And Interruptible Conversation
+
+Resume angle:
+
+- "Implemented and optimized a provider-agnostic voice interaction pipeline with STT/TTS readiness checks, half-duplex call UI, latency instrumentation, self-hosted/cloud provider support, and an upgrade path toward interruptible low-latency conversation."
+
+Product outcome:
+
+- Voice remains a first-class interaction path, but it is optimized after memory and skills become useful.
+
+Key work:
+
+- Add provider settings UI for STT/TTS endpoints, model, voice, and readiness check.
+- Split voice states into listening, transcribing, thinking, synthesizing, speaking, and degraded.
+- Add interruptible playback and turn cancellation.
+- Add streaming or chunked LLM-to-TTS response generation to reduce time-to-first-audio.
+- Treat FunASR/GPT-SoVITS as optional self-hosted/private deployment tracks, not required Electron dependencies.
 
 ## Verification Commands
 

@@ -85,6 +85,14 @@ const memorySkill: ExtensionManifest = {
       permissions: ["memory:write"],
       inputSchema: "mergeMemorySchema",
       outputSchema: "{ memory: memoryEntry, mergedFrom: string[], auditEvents: memoryAuditEvent[] }"
+    },
+    {
+      id: "memory.consolidate",
+      label: "Suggest memory consolidation",
+      description: "Inspect active/candidate memories and suggest safe merge candidates without mutating durable memory.",
+      permissions: ["memory:read"],
+      inputSchema: "consolidateMemorySchema",
+      outputSchema: "{ suggestions: memoryConsolidationSuggestion[], degradedReason?: string }"
     }
   ]
 };

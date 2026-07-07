@@ -1,5 +1,14 @@
 import { Body, Controller, Delete, Get, Inject, Param, Patch, Post, Query } from "@nestjs/common";
-import { createMemoryCandidateSchema, mergeMemorySchema, promoteMemorySchema, searchMemorySchema, updateMemorySchema } from "@sp-agent/shared";
+import {
+  consolidateMemorySchema,
+  createMemoryCandidateSchema,
+  extractMemoryFromSessionSchema,
+  mergeMemorySchema,
+  promoteMemorySchema,
+  searchMemorySchema,
+  summarizeMemorySessionSchema,
+  updateMemorySchema
+} from "@sp-agent/shared";
 import { MemoryService } from "./memory.service.js";
 
 @Controller("memory")
@@ -30,6 +39,24 @@ export class MemoryController {
   async createCandidate(@Body() body: unknown) {
     const input = createMemoryCandidateSchema.parse(body);
     return this.memoryService.createCandidate(input);
+  }
+
+  @Post("extract/session")
+  async extractFromSession(@Body() body: unknown) {
+    const input = extractMemoryFromSessionSchema.parse(body);
+    return this.memoryService.extractFromSession(input);
+  }
+
+  @Post("summaries/session")
+  async summarizeSession(@Body() body: unknown) {
+    const input = summarizeMemorySessionSchema.parse(body);
+    return this.memoryService.summarizeSession(input);
+  }
+
+  @Post("consolidate")
+  async consolidate(@Body() body: unknown) {
+    const input = consolidateMemorySchema.parse(body ?? {});
+    return this.memoryService.consolidate(input);
   }
 
   @Post("merge")
