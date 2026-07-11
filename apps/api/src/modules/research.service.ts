@@ -1,6 +1,7 @@
 import { Inject, Injectable } from "@nestjs/common";
-import type { MemorySearchResult, ResearchClaim, ResearchEvidence, ResearchReport, ResearchRequest, ResearchSource } from "@sp-agent/shared";
+import type { MemorySearchResult, ResearchClaim, ResearchEvidence, ResearchPlan, ResearchReport, ResearchRequest, ResearchSource } from "@sp-agent/shared";
 import { MemoryService } from "./memory.service.js";
+import { ResearchIntelligenceService } from "./research-intelligence.service.js";
 import { ResearchSourceService, type CollectedResearchSource, type ResearchSourceCollection } from "./research-source.service.js";
 
 export type ResearchExecutionNode = {
@@ -15,14 +16,20 @@ export type ResearchExecution = {
   nodes: ResearchExecutionNode[];
 };
 
+export type ResearchExecutionOptions = {
+  plan?: ResearchPlan;
+  synthesizeWithProvider?: boolean;
+};
+
 @Injectable()
 export class ResearchService {
   constructor(
     @Inject(ResearchSourceService) private readonly sourceService: ResearchSourceService,
-    @Inject(MemoryService) private readonly memoryService: MemoryService
+    @Inject(MemoryService) private readonly memoryService: MemoryService,
+    @Inject(ResearchIntelligenceService) private readonly intelligenceService: ResearchIntelligenceService
   ) {}
 
-  async execute(request: ResearchRequest, workflowId: string, remoteSearch?: ResearchSourceCollection): Promise<ResearchExecution> {
+  async execute(request: ResearchRequest, workflowId: string, remoteSearch?: ResearchSourceCollection, options: ResearchExecutionOptions = {}): Promise<ResearchExecution> {
     const startedAt = Date.now();
     const nodes: ResearchExecutionNode[] = [];
     nodes.push({
@@ -90,6 +97,7 @@ export class ResearchService {
       id: `research_report_${crypto.randomUUID()}`,
       workflowId,
       request,
+      plan: options.plan,
       answer: buildAnswer(request.question, claims, allSources.length),
       claims,
       sources: allSources,
@@ -112,6 +120,44 @@ export class ResearchService {
       createdAt: new Date(startedAt).toISOString(),
       completedAt: new Date().toISOString()
     };
+    if (options.synthesizeWithProvider && options.plan) {
+      try {
+        const synthesis = await this.intelligenceService.synthesize({
+          question: request.question,
+          plan: options.plan,
+          sources: report.sources,
+          evidence: report.evidence
+        });
+        const providerClaims = validateProviderClaims(synthesis.claims, report.evidence);
+        if (providerClaims.length === 0) {
+          appendDegradedReason(report, "Provider synthesis returned no claims with valid evidence references.");
+        } else {
+          report.answer = synthesis.answer;
+          report.claims = providerClaims;
+          report.uncertainty = uniqueStrings([...report.uncertainty, ...synthesis.uncertainty]);
+          report.openQuestions = uniqueStrings([...report.openQuestions, ...synthesis.openQuestions]);
+          report.provider = "provider_assisted";
+          report.metrics.citedClaimCount = providerClaims.length;
+          report.metrics.unsupportedClaimCount = 0;
+          report.metrics.conflictingClaimCount = 0;
+        }
+        nodes.push({
+          nodeId: "provider_synthesize",
+          label: "Synthesize evidence with the approved model",
+          payload: { claimCount: providerClaims.length, evidenceCount: report.evidence.length },
+          degradedReason: report.provider === "provider_assisted" ? undefined : report.degradedReason
+        });
+      } catch (error) {
+        const reason = error instanceof Error ? `Provider synthesis failed: ${error.message}` : "Provider synthesis failed.";
+        appendDegradedReason(report, reason);
+        nodes.push({
+          nodeId: "provider_synthesize",
+          label: "Synthesize evidence with the approved model",
+          payload: { claimCount: 0, evidenceCount: report.evidence.length },
+          degradedReason: reason
+        });
+      }
+    }
     nodes.push({
       nodeId: "synthesize_report",
       label: "Synthesize a cited research report",
@@ -131,6 +177,29 @@ export class ResearchService {
 
     return { report, nodes };
   }
+}
+
+function validateProviderClaims(
+  claims: Array<{ statement: string; evidenceIds: string[]; confidence: number }>,
+  evidence: ResearchEvidence[]
+): ResearchClaim[] {
+  const knownEvidenceIds = new Set(evidence.map((item) => item.id));
+  return claims
+    .map((claim) => ({ ...claim, evidenceIds: [...new Set(claim.evidenceIds.filter((id) => knownEvidenceIds.has(id)))] }))
+    .filter((claim) => claim.evidenceIds.length > 0)
+    .map((claim) => ({
+      id: `research_claim_${crypto.randomUUID()}`,
+      statement: claim.statement,
+      supportingEvidenceIds: claim.evidenceIds,
+      conflictingEvidenceIds: [],
+      confidence: claim.confidence,
+      status: "supported" as const
+    }));
+}
+
+function appendDegradedReason(report: ResearchReport, reason: string) {
+  report.degradedReason = uniqueStrings([report.degradedReason ?? "", reason]).join(" ");
+  report.uncertainty = uniqueStrings([...report.uncertainty, reason]);
 }
 
 type ResearchContentSource = CollectedResearchSource;

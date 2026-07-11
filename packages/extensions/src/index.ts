@@ -4,6 +4,7 @@ import {
   researchImportSourceSchema,
   researchBriefingSchema,
   researchRequestSchema,
+  researchProviderRunSchema,
   researchWebSearchSchema,
   type ExtensionCapability,
   type ExtensionManifest
@@ -210,6 +211,14 @@ const personalResearchSkill: ExtensionManifest = {
       permissions: ["research:remote_search", "connector:provider", "workflow:run"],
       inputSchema: "researchWebSearchSchema",
       outputSchema: "{ workflow: workflowRun }"
+    },
+    {
+      id: "research.run_provider_assisted",
+      label: "Run provider-assisted research",
+      description: "After approval, use the configured model to plan registered evidence sources, collect them, and synthesize a cited report.",
+      permissions: ["research:provider_plan", "research:provider_synthesis", "connector:provider", "workflow:run"],
+      inputSchema: "researchProviderRunSchema",
+      outputSchema: "{ workflow: workflowRun }"
     }
   ]
 };
@@ -297,6 +306,7 @@ const executableCapabilityContracts = {
   "personal.research.research.import_source": { input: researchImportSourceSchema },
   "personal.research.research.fetch_web_source": { input: researchFetchWebSourceSchema },
   "personal.research.research.search_web": { input: researchWebSearchSchema },
+  "personal.research.research.run_provider_assisted": { input: researchProviderRunSchema },
   "personal.briefing.briefing.recent_research": { input: researchBriefingSchema }
 };
 

@@ -15,19 +15,18 @@ Electron desktop shell
 -> app-owned memory, approvals, workflows, and speech
 ```
 
-Agent runtimes can propose typed capabilities but cannot directly use shell, filesystem-write, browser-control, wallet, or posting tools. Write, provider, and destructive actions require an exact matching approval; durable memory is reversible and auditable.
+Agent runtimes can propose typed capabilities but cannot directly use shell, filesystem-write, browser-control, wallet, or posting tools. Sensitive writes, imports, external actions, new data scopes, and provider data egress require an explicit scoped approval or revocable policy; durable memory is reversible and auditable.
 
 ## Research And Decision Workflow
 
 ```text
-Chat request such as "帮我调研 xx，并给出证据和不确定项"
--> Agent selects `personal.research` when appropriate
--> API validates and runs the read-only capability
--> collect and normalize evidence
--> retrieve approved non-sensitive memory
--> compare supporting and conflicting evidence
--> produce a cited report with uncertainty
--> optionally request approval to promote a conclusion to memory
+Chat request
+-> Planner selects ordinary chat, local grounding, or a research Skill
+-> Selected Skill declares evidence requirements and eligible Connectors
+-> API validates scope, budget, policy, and invokes Connectors
+-> Model synthesizes from collected evidence when research is required
+-> Produce a cited report with uncertainty
+-> Optionally request approval to promote a conclusion to memory
 ```
 
 The initial release is local-first: allowlisted project documents, local bookmarks, and user-provided sources. Remote retrieval is added only through scoped, read-only connectors with provenance, explicit policy, and degraded states. Skill catalog, workflow, memory, and approval panels are for discovery and review; future Skills do not add new required launch buttons.

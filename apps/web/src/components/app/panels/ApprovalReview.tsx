@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import { Check, RefreshCw, ShieldCheck, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
@@ -13,20 +14,32 @@ type CompletedResearchSummary = {
   degradedReason?: string;
 };
 
+type RemoteResearchAccess = {
+  enabled: boolean;
+  updatedAt?: string;
+};
+
 export function ApprovalReview() {
   const [open, setOpen] = useState(false);
   const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
   const [loading, setLoading] = useState(false);
+  const [decidingId, setDecidingId] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [completedResearch, setCompletedResearch] = useState<CompletedResearchSummary | null>(null);
+  const [remoteResearchAccess, setRemoteResearchAccess] = useState<RemoteResearchAccess>({ enabled: false });
+  const [remoteResearchPrompt, setRemoteResearchPrompt] = useState<ApprovalRequest | null>(null);
 
   const pending = approvals.filter((approval) => approval.status === "pending");
 
-  async function refreshApprovals() {
+  async function refreshApprovals(openRemoteResearchPrompt = false) {
     setLoading(true);
     try {
       const data = await fetchJson<{ approvals: ApprovalRequest[] }>(`${apiBase}/approvals?status=pending`);
       setApprovals(data.approvals);
+      if (openRemoteResearchPrompt) {
+        const request = data.approvals.find(isRemoteResearchApproval);
+        if (request) setRemoteResearchPrompt(request);
+      }
       setStatus(null);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Approvals unavailable");
@@ -35,8 +48,17 @@ export function ApprovalReview() {
     }
   }
 
+  async function refreshRemoteResearchAccess() {
+    try {
+      setRemoteResearchAccess(await fetchJson<RemoteResearchAccess>(`${apiBase}/research/access`));
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Remote research access unavailable");
+    }
+  }
+
   useEffect(() => {
     void refreshApprovals();
+    void refreshRemoteResearchAccess();
   }, []);
 
   useEffect(() => {
@@ -45,13 +67,16 @@ export function ApprovalReview() {
 
   useEffect(() => {
     function handleApprovalRequested() {
-      void refreshApprovals();
+      void refreshApprovals(true);
+      void refreshRemoteResearchAccess();
     }
     window.addEventListener("sp-agent:approval-requested", handleApprovalRequested);
     return () => window.removeEventListener("sp-agent:approval-requested", handleApprovalRequested);
   }, []);
 
   async function decide(id: string, decision: "approved" | "denied") {
+    const request = approvals.find((approval) => approval.id === id) ?? remoteResearchPrompt;
+    setDecidingId(id);
     setStatus(decision === "approved" ? "Approving" : "Denying");
     try {
       const data = await fetchJson<{ approval: ApprovalRequest }>(`${apiBase}/approvals/${id}`, {
@@ -66,9 +91,25 @@ export function ApprovalReview() {
         setCompletedResearch(null);
       }
       await refreshApprovals();
+      await refreshRemoteResearchAccess();
+      if (request && isRemoteResearchApproval(request)) setRemoteResearchPrompt(null);
       setStatus(decision === "approved" ? "Approved and executed" : "Denied");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Approval update failed");
+    } finally {
+      setDecidingId(null);
+    }
+  }
+
+  async function disableRemoteResearchAccess() {
+    setLoading(true);
+    try {
+      setRemoteResearchAccess(await fetchJson<RemoteResearchAccess>(`${apiBase}/research/access`, { method: "DELETE" }));
+      setStatus("Remote research will ask again before the next provider request");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not update remote research access");
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -117,6 +158,21 @@ export function ApprovalReview() {
           </Button>
         </div>
         {status && <p className="approvalStatus" data-testid="approval-review-status">{status}</p>}
+        <section className="grid gap-2 border-b px-5 py-4 text-sm" data-testid="remote-research-access">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <p className="font-medium text-foreground">Remote research</p>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                {remoteResearchAccess.enabled ? "Allowed for web search and provider-assisted research." : "Ask before sending a research question or evidence to a provider."}
+              </p>
+            </div>
+            {remoteResearchAccess.enabled && (
+              <Button variant="outline" size="sm" onClick={() => void disableRemoteResearchAccess()} disabled={loading}>
+                Turn off
+              </Button>
+            )}
+          </div>
+        </section>
         {completedResearch && (
           <section className="border-b border-border px-5 py-4 text-sm" data-testid="approved-research-result">
             <p className="font-medium text-foreground">{completedResearch.answer}</p>
@@ -149,11 +205,11 @@ export function ApprovalReview() {
                 </dl>
                 <pre>{JSON.stringify(approval.input, null, 2)}</pre>
                 <div className="approvalActions">
-                  <Button variant="outline" className="approvalDeny" onClick={() => void decide(approval.id, "denied")}>
+                  <Button variant="outline" className="approvalDeny" onClick={() => void decide(approval.id, "denied")} disabled={decidingId === approval.id}>
                     <X size={15} />
                     Deny
                   </Button>
-                  <Button className="approvalApprove" onClick={() => void decide(approval.id, "approved")}>
+                  <Button className="approvalApprove" onClick={() => void decide(approval.id, "approved")} disabled={decidingId === approval.id}>
                     <Check size={15} />
                     Approve
                   </Button>
@@ -163,8 +219,51 @@ export function ApprovalReview() {
           )}
         </div>
       </SheetContent>
+      <DialogPrimitive.Root open={Boolean(remoteResearchPrompt)} onOpenChange={(nextOpen) => !nextOpen && setRemoteResearchPrompt(null)}>
+        <DialogPrimitive.Portal>
+          <DialogPrimitive.Backdrop className="fixed inset-0 z-[60] bg-black/20 backdrop-blur-[1px] transition-opacity duration-150 data-ending-style:opacity-0 data-starting-style:opacity-0" />
+          <DialogPrimitive.Popup className="fixed top-1/2 left-1/2 z-[60] grid w-[min(440px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 gap-5 rounded-lg border bg-popover p-5 text-popover-foreground shadow-xl outline-none transition duration-150 data-ending-style:scale-95 data-ending-style:opacity-0 data-starting-style:scale-95 data-starting-style:opacity-0" data-testid="remote-research-approval-dialog">
+            <div className="grid gap-2">
+              <DialogPrimitive.Title className="text-base font-semibold text-foreground">Allow remote research?</DialogPrimitive.Title>
+              <DialogPrimitive.Description className="text-sm leading-relaxed text-muted-foreground">
+                This first approval enables automatic web search and provider-assisted research until you turn it off. Memory, imports, and external writes still require separate approval.
+              </DialogPrimitive.Description>
+            </div>
+            {remoteResearchPrompt && (
+              <dl className="grid gap-3 border-y py-4 text-sm">
+                <div className="grid gap-1">
+                  <dt className="text-xs font-medium text-muted-foreground">Question sent to providers</dt>
+                  <dd className="m-0 [overflow-wrap:anywhere] text-foreground">{approvalQuestion(remoteResearchPrompt)}</dd>
+                </div>
+                <div className="grid gap-1">
+                  <dt className="text-xs font-medium text-muted-foreground">Data scope</dt>
+                  <dd className="m-0 text-foreground">Question, search terms, and collected evidence excerpts</dd>
+                </div>
+              </dl>
+            )}
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button variant="ghost" onClick={() => setRemoteResearchPrompt(null)}>Not now</Button>
+              <Button variant="outline" onClick={() => remoteResearchPrompt && void decide(remoteResearchPrompt.id, "denied")} disabled={decidingId === remoteResearchPrompt?.id}>Deny</Button>
+              <Button onClick={() => remoteResearchPrompt && void decide(remoteResearchPrompt.id, "approved")} disabled={decidingId === remoteResearchPrompt?.id}>
+                Allow and research
+              </Button>
+            </div>
+          </DialogPrimitive.Popup>
+        </DialogPrimitive.Portal>
+      </DialogPrimitive.Root>
     </Sheet>
   );
+}
+
+function isRemoteResearchApproval(approval: ApprovalRequest) {
+  return approval.extensionId === "personal.research" && (
+    approval.capabilityId === "research.search_web" || approval.capabilityId === "research.run_provider_assisted"
+  );
+}
+
+function approvalQuestion(approval: ApprovalRequest) {
+  const question = approval.input.question;
+  return typeof question === "string" && question.trim() ? question : approval.action;
 }
 
 function toCompletedResearchSummary(response: ExtensionInvocationResponse): CompletedResearchSummary | null {

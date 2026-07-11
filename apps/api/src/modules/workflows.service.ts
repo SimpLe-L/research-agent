@@ -2,10 +2,13 @@ import { BadRequestException, Inject, Injectable, NotFoundException } from "@nes
 import {
   projectDocSearchSchema,
   researchReportSchema,
+  researchProviderRunSchema,
   researchRequestSchema,
   researchWebSearchSchema,
   type ProjectDocSearchInput,
   type ResearchRequest,
+  type ResearchPlan,
+  type ResearchProviderRunInput,
   type ResearchWebSearchInput,
   type WorkflowNodeEvent,
   type WorkflowRun
@@ -14,6 +17,7 @@ import { readFile } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 import { LocalJsonStore } from "./local-json-store.service.js";
 import { ResearchService } from "./research.service.js";
+import { ResearchIntelligenceService } from "./research-intelligence.service.js";
 import { ResearchSourceService } from "./research-source.service.js";
 
 type WorkflowsFile = {
@@ -34,7 +38,8 @@ export class WorkflowsService {
   constructor(
     @Inject(LocalJsonStore) private readonly store: LocalJsonStore,
     @Inject(ResearchService) private readonly researchService: ResearchService,
-    @Inject(ResearchSourceService) private readonly researchSourceService: ResearchSourceService
+    @Inject(ResearchSourceService) private readonly researchSourceService: ResearchSourceService,
+    @Inject(ResearchIntelligenceService) private readonly researchIntelligenceService: ResearchIntelligenceService
   ) {}
 
   async list() {
@@ -69,6 +74,9 @@ export class WorkflowsService {
       return this.runProjectDocSearch(projectDocSearchSchema.parse(workflow.input), { retriedFrom: id });
     }
     if (workflow.kind === "personal.research.run") {
+      if ((workflow.input as Record<string, unknown>).providerPipeline === "siliconflow") {
+        return this.runProviderAssistedResearch(researchProviderRunSchema.parse(workflow.input), { retriedFrom: id });
+      }
       if ((workflow.input as Record<string, unknown>).remoteSearch === "tavily") {
         return this.runWebResearch(researchWebSearchSchema.parse(workflow.input), { retriedFrom: id });
       }
@@ -121,6 +129,17 @@ export class WorkflowsService {
     };
     const workflow = await this.createWorkflow(
       { ...request, remoteSearch: "tavily", maxResults: input.maxResults },
+      "running",
+      metadata,
+      "personal.research.run"
+    );
+    await this.executeResearch(workflow.id);
+    return { workflow: await this.get(workflow.id) };
+  }
+
+  async runProviderAssistedResearch(input: ResearchProviderRunInput, metadata: Record<string, unknown> = {}) {
+    const workflow = await this.createWorkflow(
+      { ...input, providerPipeline: "siliconflow" },
       "running",
       metadata,
       "personal.research.run"
@@ -238,11 +257,37 @@ export class WorkflowsService {
       await this.replaceWorkflow(workflow);
     }
     try {
-      const input = researchRequestSchema.parse(workflow.input);
-      const remoteSearch = (workflow.input as Record<string, unknown>).remoteSearch === "tavily"
-        ? await this.researchSourceService.searchWeb(researchWebSearchSchema.parse(workflow.input))
+      const rawInput = workflow.input as Record<string, unknown>;
+      const providerInput = rawInput.providerPipeline === "siliconflow"
+        ? researchProviderRunSchema.parse(rawInput)
         : undefined;
-      const execution = await this.researchService.execute(input, workflow.id, remoteSearch);
+      let plan: ResearchPlan | undefined;
+      let input: ResearchRequest;
+      if (providerInput) {
+        plan = await this.researchIntelligenceService.createPlan(providerInput);
+        input = validateProviderPlan(providerInput, plan);
+        workflow.nodeEvents.push(makeNodeEvent("provider_plan", "Create a validated model research plan", "completed", {
+          decisionType: plan.decisionType,
+          dimensions: plan.requiredDimensions,
+          connectorIds: plan.connectorIds,
+          sourceScopes: plan.sourceScopes,
+          maxSources: input.maxSources,
+          maxWebResults: plan.maxWebResults
+        }));
+      } else {
+        input = researchRequestSchema.parse(rawInput);
+      }
+      const remoteSearch = input.sourceScopes.includes("web")
+        ? await this.researchSourceService.searchWeb({
+            question: input.question,
+            sessionId: input.sessionId,
+            maxResults: plan?.maxWebResults ?? researchWebSearchSchema.parse(rawInput).maxResults
+          })
+        : undefined;
+      const execution = await this.researchService.execute(input, workflow.id, remoteSearch, {
+        plan,
+        synthesizeWithProvider: Boolean(providerInput)
+      });
       for (const node of execution.nodes) {
         workflow.nodeEvents.push(makeNodeEvent(node.nodeId, node.label, "completed", node.payload, undefined, undefined, undefined, node.degradedReason));
       }
@@ -319,6 +364,29 @@ function findWorkflow(file: WorkflowsFile, id: string) {
   const workflow = file.workflows.find((item) => item.id === id);
   if (!workflow) throw new NotFoundException(`Workflow ${id} not found`);
   return workflow;
+}
+
+function validateProviderPlan(input: ResearchProviderRunInput, plan: ResearchPlan): ResearchRequest {
+  const scopeByConnector = {
+    local_documents: "local_documents",
+    local_bookmarks: "bookmarks",
+    user_provided_sources: "user_provided",
+    tavily_web_search: "web"
+  } as const;
+  const sourceScopes = [...new Set(plan.connectorIds.map((connectorId) => scopeByConnector[connectorId]))];
+  if (sourceScopes.length === 0) throw new BadRequestException("Provider research plan did not select a registered connector.");
+  if (plan.sourceScopes.some((scope) => !sourceScopes.includes(scope))) {
+    throw new BadRequestException("Provider research plan requested a source scope that is not backed by its selected connectors.");
+  }
+  return {
+    question: input.question,
+    sessionId: input.sessionId,
+    sourceScopes,
+    sourceIds: [],
+    maxSources: Math.min(plan.maxSources, input.maxSources),
+    reportFormat: input.reportFormat,
+    strategy: "provider_assisted"
+  };
 }
 
 function makeNodeEvent(

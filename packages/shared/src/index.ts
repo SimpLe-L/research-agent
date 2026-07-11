@@ -27,6 +27,13 @@ export const settingsSchema = z.object({
 });
 export type AppSettings = z.infer<typeof settingsSchema>;
 
+export const remoteResearchAccessSchema = z.object({
+  enabled: z.boolean().default(false),
+  updatedAt: z.string().optional(),
+  approvalId: z.string().optional()
+});
+export type RemoteResearchAccess = z.infer<typeof remoteResearchAccessSchema>;
+
 export const chatRoleSchema = z.enum(["user", "assistant", "system", "tool"]);
 export type ChatRole = z.infer<typeof chatRoleSchema>;
 
@@ -428,6 +435,18 @@ export const researchReportSchema = z.object({
   id: z.string(),
   workflowId: z.string(),
   request: researchRequestSchema,
+  plan: z.object({
+    decisionType: z.string(),
+    objective: z.string(),
+    researchQuestions: z.array(z.string()),
+    requiredDimensions: z.array(z.string()),
+    connectorIds: z.array(z.enum(["local_documents", "local_bookmarks", "user_provided_sources", "tavily_web_search"])),
+    sourceScopes: z.array(researchSourceScopeSchema),
+    maxSources: z.number(),
+    maxWebResults: z.number(),
+    freshness: z.string(),
+    rationale: z.string()
+  }).optional(),
   answer: z.string().min(1),
   claims: z.array(researchClaimSchema).default([]),
   sources: z.array(researchSourceSchema).default([]),
@@ -475,6 +494,29 @@ export const researchWebSearchSchema = z.object({
   maxResults: z.coerce.number().int().positive().max(8).default(5)
 });
 export type ResearchWebSearchInput = z.infer<typeof researchWebSearchSchema>;
+
+export const researchPlanSchema = z.object({
+  decisionType: z.string().min(1).max(80),
+  objective: z.string().min(3).max(1_000),
+  researchQuestions: z.array(z.string().min(3).max(500)).min(1).max(8),
+  requiredDimensions: z.array(z.string().min(2).max(120)).min(1).max(12),
+  connectorIds: z.array(z.enum(["local_documents", "local_bookmarks", "user_provided_sources", "tavily_web_search"])).min(1).max(4),
+  sourceScopes: z.array(researchSourceScopeSchema).min(1).max(4),
+  maxSources: z.coerce.number().int().positive().max(20).default(10),
+  maxWebResults: z.coerce.number().int().positive().max(8).default(5),
+  freshness: z.string().min(1).max(160),
+  rationale: z.string().min(1).max(2_000)
+});
+export type ResearchPlan = z.infer<typeof researchPlanSchema>;
+
+export const researchProviderRunSchema = z.object({
+  question: z.string().min(3).max(4_000),
+  sessionId: z.string().min(1).max(160).optional(),
+  maxSources: z.coerce.number().int().positive().max(20).default(10),
+  maxWebResults: z.coerce.number().int().positive().max(8).default(5),
+  reportFormat: z.enum(["brief", "detailed"]).default("brief")
+});
+export type ResearchProviderRunInput = z.infer<typeof researchProviderRunSchema>;
 
 export const researchBriefingSchema = z.object({
   limit: z.coerce.number().int().positive().max(20).default(5)

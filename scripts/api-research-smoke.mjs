@@ -1,17 +1,21 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 
 const port = Number(process.env.SMOKE_API_PORT ?? 5000 + Math.floor(Math.random() * 800));
 const base = process.env.SMOKE_API_BASE ?? `http://127.0.0.1:${port}/api`;
+const intelligencePort = port + 1;
 const dataDir = await mkdtemp(join(tmpdir(), "sp-agent-research-smoke-data-"));
 const projectRoot = await mkdtemp(join(tmpdir(), "sp-agent-research-smoke-project-"));
 let apiProcess;
+let intelligenceServer;
 
 try {
   await seedFixtureProject();
   if (!process.env.SMOKE_API_BASE) {
+    intelligenceServer = await startResearchIntelligenceFixture(intelligencePort);
     apiProcess = spawn(process.execPath, ["apps/api/dist/apps/api/src/main.js"], {
       cwd: process.cwd(),
       env: {
@@ -19,7 +23,8 @@ try {
         PORT: String(port),
         SP_AGENT_DATA_DIR: dataDir,
         SP_AGENT_PROJECT_ROOT: projectRoot,
-        SILICONFLOW_API_KEY: "",
+        SILICONFLOW_API_KEY: "research-smoke-key",
+        SILICONFLOW_BASE_URL: `http://127.0.0.1:${intelligencePort}/v1`,
         TAVILY_API_KEY: ""
       },
       stdio: ["ignore", "pipe", "pipe"]
@@ -33,6 +38,7 @@ try {
   assert(research.capabilities.some((capability) => capability.id === "research.run"), "research.run should be registered");
   assert(research.capabilities.some((capability) => capability.id === "research.get_report"), "research.get_report should be registered");
   assert(research.capabilities.some((capability) => capability.id === "research.search_web"), "research.search_web should be registered");
+  assert(research.capabilities.some((capability) => capability.id === "research.run_provider_assisted"), "research.run_provider_assisted should be registered");
 
   const supported = await runResearch("Where are reports stored?");
   assert(supported.workflow.status === "completed", "supported research run should complete");
@@ -94,11 +100,68 @@ try {
   assert(webSearch.status === "completed", "approved web search should run a research workflow");
   assert(webSearch.result.workflow.result.request.sourceScopes.includes("web"), "web search workflow should record the remote source scope");
   assert(webSearch.result.workflow.result.degradedReason?.includes("TAVILY_API_KEY"), "missing web search configuration should remain explicit instead of inventing evidence");
+  const remoteResearchEnabled = await getJson(`${base}/research/access`);
+  assert(remoteResearchEnabled.enabled === true, "the first approved remote research request should enable the revocable remote research policy");
+  const autoWebSearch = await postJson(`${base}/extensions/personal.research/invoke`, { capabilityId: "research.search_web", input: webSearchInput });
+  assert(autoWebSearch.status === "completed", "remote research policy should allow bounded follow-up web searches without a new approval");
+  const remoteResearchDisabled = await deleteJson(`${base}/research/access`);
+  assert(remoteResearchDisabled.enabled === false, "remote research policy should be revocable");
+
+  const providerInput = { question: "Where are reports stored?", maxSources: 6, maxWebResults: 3 };
+  const providerPending = await postJson(`${base}/extensions/personal.research/invoke`, { capabilityId: "research.run_provider_assisted", input: providerInput });
+  assert(providerPending.status === "pending_approval", "model planning and synthesis should require approval before provider access");
+  assert(providerPending.permissionAudit.mode === "write_or_provider", "provider-assisted research should be audited as a provider action");
+  await patchJson(`${base}/approvals/${providerPending.approval.id}`, { decision: "approved", reason: "Research smoke provider policy." });
+  const providerRun = await postJson(`${base}/extensions/personal.research/invoke`, {
+    capabilityId: "research.run_provider_assisted",
+    input: providerInput,
+    approvalId: providerPending.approval.id
+  });
+  assert(providerRun.status === "completed", "approved provider-assisted research should create a workflow");
+  assert(providerRun.result.workflow.status === "completed", "provider-assisted research should complete with the model fixture");
+  assert(providerRun.result.workflow.result.provider === "provider_assisted", "provider-assisted workflow should retain the provider synthesis marker");
+  assert(providerRun.result.workflow.result.plan.connectorIds.includes("local_documents"), "provider plan should retain the selected registered connector");
+  assert(providerRun.result.workflow.result.claims.every((claim) => claim.supportingEvidenceIds.length > 0), "provider-synthesized claims must retain validated evidence ids");
+  const autoProviderRun = await postJson(`${base}/extensions/personal.research/invoke`, { capabilityId: "research.run_provider_assisted", input: providerInput });
+  assert(autoProviderRun.status === "completed", "remote research policy should allow provider-assisted follow-up research without a new approval");
 
   console.log(JSON.stringify({ ok: true, workflowId: supported.workflow.id, reportId: supportedReport.id, dataDir }, null, 2));
 } finally {
   if (apiProcess) apiProcess.kill("SIGTERM");
+  if (intelligenceServer) await new Promise((resolve) => intelligenceServer.close(resolve));
   await Promise.all([rm(dataDir, { recursive: true, force: true }), rm(projectRoot, { recursive: true, force: true })]);
+}
+
+function startResearchIntelligenceFixture(port) {
+  const server = createServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    const payload = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    const system = payload.messages?.[0]?.content ?? "";
+    const user = JSON.parse(payload.messages?.[1]?.content ?? "{}");
+    const result = system.includes("research planner")
+      ? {
+          decisionType: "fact_lookup",
+          objective: user.question,
+          researchQuestions: [user.question],
+          requiredDimensions: ["documented storage location"],
+          connectorIds: ["local_documents"],
+          sourceScopes: ["local_documents"],
+          maxSources: 4,
+          maxWebResults: 1,
+          freshness: "current project documentation",
+          rationale: "The fixture question is answered by allowlisted local documentation."
+        }
+      : {
+          answer: "The cited local documentation provides the requested evidence.",
+          claims: user.evidence?.[0] ? [{ statement: user.evidence[0].excerpt, evidenceIds: [user.evidence[0].id], confidence: 0.8 }] : [],
+          uncertainty: [],
+          openQuestions: []
+        };
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(result) } }] }));
+  });
+  return new Promise((resolve) => server.listen(port, "127.0.0.1", () => resolve(server)));
 }
 
 async function seedFixtureProject() {
@@ -156,6 +219,11 @@ async function patchJson(url, body) {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body)
   });
+  return readJson(response, url);
+}
+
+async function deleteJson(url) {
+  const response = await fetch(url, { method: "DELETE" });
   return readJson(response, url);
 }
 

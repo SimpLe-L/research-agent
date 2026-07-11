@@ -28,25 +28,26 @@ Old Web3 and removed research code are not part of the active product and must s
 - Write/provider extension actions require an approved matching `approvalId`; read-only actions execute directly with `permissionAudit`.
 - Workflow records expose status, timestamps, node events, result/error/degraded reason, retry, cancel, async start, and stale-run recovery.
 - Speech is implemented as a half-duplex API-owned chat path. Interruptible/streaming voice remains future work.
-- `personal.research` is active: it collects scoped local documents, bookmarks, imported sources, approved web fetches, and approval-gated Tavily search results; produces persisted cited reports; marks conflict/insufficient evidence; and can request approval to retain a selected claim as memory.
-- The chat shell is the primary invocation surface: the Agent autonomously selects active read-only Skills when they materially improve an answer. Research, comparison, verification, and evidence requests route to `personal.research`; when local evidence is insufficient it may propose, but not execute, a scoped remote continuation that enters the approval queue.
+- `personal.research` is active: it collects scoped local documents, bookmarks, imported sources, approved web fetches, and remote-policy-authorized Tavily search results; produces persisted cited reports; marks conflict/insufficient evidence; and can request approval to retain a selected claim as memory.
+- Provider-assisted research is active behind a revocable remote-research access policy: the first approval permits the bounded Tavily/provider path, then SiliconFlow creates a structured plan over registered connectors, the API validates its scopes and budgets, and the model synthesizes only from collected evidence whose ids are revalidated before persistence. Every policy change and research workflow is audited locally; memory/import/write approvals remain per-action.
+- The chat shell is the primary invocation surface: a planner classifies ordinary chat, locally grounded answers, and evidence-backed research. For research it selects a Skill; the Skill defines an evidence blueprint and the API validates and executes its registered Connectors. Local sources are preferred, while external retrieval is requested only for a material freshness or external-evidence gap.
 - Skill catalog, workflow, memory, and approval panels are secondary discoverability, history, and audit surfaces. They do not provide a required per-Skill run flow.
 - `research-eval.v1` contains 30 deterministic offline cases and reports source, evidence, citation, conflict, memory, and latency metrics.
 
 ## Active Priorities
 
-1. Add a model-backed generic research planner and evidence-constrained provider synthesis to turn collected sources into inspectable decision support.
-2. Use `crypto_investment` and `market_entry` only as fixture-backed validation examples; keep the planner and connector catalog domain-generic.
-3. Add external connectors only with explicit source scope, approval behavior, fixtures, provenance, freshness, and unit/limit metadata.
+1. Move the planner contract from direct Connector selection to response-mode classification and registered Skill selection; let each Skill produce an API-validated evidence blueprint.
+2. Use `crypto_investment` and `market_entry` only as fixture-backed domain-Skill examples; keep routing and the Connector catalog domain-generic.
+3. Add external Connectors only with explicit source scope, reusable-policy or per-action approval behavior, fixtures, provenance, freshness, and unit/limit metadata.
 4. Keep source scope, approvals, durable memory promotion, and research reports inspectable and reversible; optimize voice only after research reliability is evaluated.
 
 ## Current Gaps
 
-- Research extraction is deterministic and heuristic-driven. Provider-assisted synthesis is intentionally degraded until a provider-backed, evaluated implementation is added.
-- Research does not yet use a model to turn an open-ended question into a validated structured evidence plan. It therefore cannot reliably choose the market, on-chain, commerce, regulation, or competitive data required for a decision question.
+- The current provider planner selects Connector ids directly. It must evolve to choose a Skill first, then have that Skill declare validated evidence requirements and eligible Connectors.
+- The Connector catalog currently has local sources and Tavily search only. Add domain data Connectors one at a time; a model plan must not be treated as evidence when a required Connector is unavailable.
 - LangGraph is not needed for the immediate planner/profile implementation. Reassess it when connector fan-out, approval-resume checkpoints, or model revise/validate loops exceed the current workflow service's bounded synchronous model.
 - Local JSON persistence is atomic but still single-process. Add durable checkpoints or a database only when concurrent/long-running research requires it.
-- Remote web fetch is restricted to explicit `RESEARCH_WEB_ALLOWLIST` hosts and approval. Tavily web search is a separate approval-gated connector that requires `TAVILY_API_KEY`; add further providers only with the same source-specific policy, provenance, and fixture coverage.
+- Remote web fetch is restricted to explicit `RESEARCH_WEB_ALLOWLIST` hosts and per-action approval. Tavily search and provider-assisted synthesis require a first, revocable remote-research access approval and then run within that bounded policy; `TAVILY_API_KEY` remains required. Add further providers only with the same source-specific policy, provenance, and fixture coverage.
 - The web bundle remains above the Vite chunk-size warning threshold; code-split review panels when product usage justifies it.
 
 ## Verification Policy

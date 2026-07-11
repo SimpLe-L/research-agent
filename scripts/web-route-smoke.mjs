@@ -42,6 +42,8 @@ const requiredBundleMarkers = [
   "approval-review-button",
   "approval-review-panel",
   "approval-list",
+  "remote-research-access",
+  "remote-research-approval-dialog",
   "memory-review-button",
   "memory-review-panel",
   "memory-list",

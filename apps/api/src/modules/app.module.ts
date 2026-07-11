@@ -16,6 +16,9 @@ import { MemoryService } from "./memory.service.js";
 import { MemoryVectorService } from "./memory-vector.service.js";
 import { ProvidersController } from "./providers.controller.js";
 import { ResearchService } from "./research.service.js";
+import { ResearchIntelligenceService } from "./research-intelligence.service.js";
+import { ResearchAccessController } from "./research-access.controller.js";
+import { ResearchAccessService } from "./research-access.service.js";
 import { ResearchSourceService } from "./research-source.service.js";
 import { SettingsController } from "./settings.controller.js";
 import { SettingsService } from "./settings.service.js";
@@ -36,7 +39,8 @@ import { WorkflowsService } from "./workflows.service.js";
     ExtensionsController,
     ApprovalsController,
     WorkflowsController,
-    VoiceController
+    VoiceController,
+    ResearchAccessController
   ],
   providers: [
     LocalJsonStore,
@@ -47,6 +51,8 @@ import { WorkflowsService } from "./workflows.service.js";
     MemoryEmbeddingService,
     MemoryVectorService,
     ResearchSourceService,
+    ResearchAccessService,
+    ResearchIntelligenceService,
     ResearchService,
     AgentShellService,
     ExtensionsService,

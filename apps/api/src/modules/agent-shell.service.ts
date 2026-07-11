@@ -179,7 +179,7 @@ export class AgentShellService {
 }
 
 function isApprovalProposalCapability(extensionId: string, capabilityId: string) {
-  return extensionId === "personal.research" && capabilityId === "research.search_web";
+  return extensionId === "personal.research" && (capabilityId === "research.search_web" || capabilityId === "research.run_provider_assisted");
 }
 
 function makeSessionTitle(content: string) {

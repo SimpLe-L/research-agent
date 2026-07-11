@@ -16,6 +16,7 @@ import {
   researchBriefingSchema,
   researchGetReportSchema,
   researchImportSourceSchema,
+  researchProviderRunSchema,
   researchRequestSchema,
   researchWebSearchSchema,
   searchMemorySchema,
@@ -28,6 +29,7 @@ import { ApprovalsService } from "./approvals.service.js";
 import { LocalJsonStore } from "./local-json-store.service.js";
 import { MemoryService } from "./memory.service.js";
 import { ResearchSourceService } from "./research-source.service.js";
+import { ResearchAccessService } from "./research-access.service.js";
 import { WorkflowsService } from "./workflows.service.js";
 
 type ExtensionInvocationResponse = {
@@ -55,6 +57,7 @@ export class ExtensionsService {
     @Inject(ApprovalsService) private readonly approvalsService: ApprovalsService,
     @Inject(WorkflowsService) private readonly workflowsService: WorkflowsService,
     @Inject(ResearchSourceService) private readonly researchSourceService: ResearchSourceService,
+    @Inject(ResearchAccessService) private readonly researchAccessService: ResearchAccessService,
     @Inject(LocalJsonStore) private readonly store: LocalJsonStore
   ) {
     this.handlers = [
@@ -196,8 +199,25 @@ export class ExtensionsService {
           const input = researchWebSearchSchema.parse(request.input);
           const approval = await this.ensureApproved(request, audit, "Search the web with the configured Tavily connector and create a cited research report.");
           if (!approval.approved) return approval.response;
+          await this.enableRemoteResearchAccess(approval.approval);
           const result = await this.workflowsService.runWebResearch(input);
           return this.completedAfterApproval(approval.approval, "personal.research", "research.search_web", audit, result);
+        }
+      },
+      {
+        extensionId: "personal.research",
+        capabilityId: "research.run_provider_assisted",
+        handle: async (request, audit) => {
+          const input = researchProviderRunSchema.parse(request.input);
+          const approval = await this.ensureApproved(
+            request,
+            audit,
+            "Send this question and the collected evidence to the configured model for research planning and cited synthesis; the plan may use the approved Tavily web-search connector."
+          );
+          if (!approval.approved) return approval.response;
+          await this.enableRemoteResearchAccess(approval.approval);
+          const result = await this.workflowsService.runProviderAssistedResearch(input);
+          return this.completedAfterApproval(approval.approval, "personal.research", "research.run_provider_assisted", audit, result);
         }
       },
       {
@@ -304,6 +324,9 @@ export class ExtensionsService {
 
   private async ensureApproved(request: InvokeExtensionInput, audit: ExtensionInvocationAudit, reason: string) {
     if (audit.mode === "read_only") return { approved: true as const, approval: undefined };
+    if (isAutoApprovedRemoteResearch(audit) && await this.researchAccessService.isEnabled()) {
+      return { approved: true as const, approval: undefined };
+    }
     if (request.approvalId) {
       const approved = await this.approvalsService.requireApprovedFor(request.approvalId, {
         extensionId: audit.extensionId,
@@ -337,6 +360,10 @@ export class ExtensionsService {
         degradedReason: "Capability requires explicit approval before execution."
       }
     };
+  }
+
+  private async enableRemoteResearchAccess(approval: { id: string } | undefined) {
+    if (approval) await this.researchAccessService.enableFromApproval(approval.id);
   }
 
   private async searchLocalBookmarks(input: { query: string; limit: number }) {
@@ -525,6 +552,13 @@ function buildPermissionAudit(extensionId: string, capabilityId: string, capabil
 function requiredString(value: unknown, name: string) {
   if (typeof value !== "string" || !value.trim()) throw new BadRequestException(`${name} is required`);
   return value;
+}
+
+function isAutoApprovedRemoteResearch(audit: ExtensionInvocationAudit) {
+  return (
+    audit.extensionId === "personal.research" &&
+    (audit.capabilityId === "research.search_web" || audit.capabilityId === "research.run_provider_assisted")
+  );
 }
 
 function tokenize(value: string) {

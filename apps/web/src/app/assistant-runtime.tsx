@@ -262,7 +262,7 @@ export function useAgentAssistantRuntime() {
           if (event.type === "error") {
             throw new Error(event.message);
           }
-          if (event.result.toolCalls?.some((call) => call.toolName === "personal_research_research_search_web")) {
+          if (event.result.toolCalls?.some((call) => call.toolName === "personal_research_research_search_web" || call.toolName === "personal_research_research_run_provider_assisted")) {
             window.dispatchEvent(new Event("sp-agent:approval-requested"));
           }
           const degraded = event.result.degradedReason ? `\n\n降级原因：${event.result.degradedReason}` : "";
