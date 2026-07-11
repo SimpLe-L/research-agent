@@ -102,7 +102,7 @@ function Logo({ collapsed = false }: { collapsed?: boolean }) {
     <div className={cn("flex h-14 min-w-0 items-center gap-2.5 px-5", collapsed && "justify-center px-0")}>
       <Bot className="size-5 shrink-0" />
       <strong className={cn("truncate text-[15px] font-semibold transition-all", collapsed && "w-0 opacity-0")}>
-        assistant-ui
+        SP Agent
       </strong>
     </div>
   );

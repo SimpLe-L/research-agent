@@ -1,5 +1,5 @@
 import { BadRequestException, Inject, Injectable, NotFoundException } from "@nestjs/common";
-import { findCapability, getExtensionManifest, getExtensionRuntimeStatus } from "@sp-agent/extensions";
+import { findCapability, getExtensionManifest, getExtensionRuntimeStatus, parseExtensionCapabilityInput } from "@sp-agent/extensions";
 import { getSpeechStatus } from "@sp-agent/speech";
 import {
   consolidateMemorySchema,
@@ -12,6 +12,12 @@ import {
   projectPlanSchema,
   promoteMemorySchema,
   projectDocSearchSchema,
+  researchFetchWebSourceSchema,
+  researchBriefingSchema,
+  researchGetReportSchema,
+  researchImportSourceSchema,
+  researchRequestSchema,
+  researchWebSearchSchema,
   searchMemorySchema,
   type ExtensionCapability,
   type ExtensionInvocationAudit,
@@ -21,6 +27,7 @@ import {
 import { ApprovalsService } from "./approvals.service.js";
 import { LocalJsonStore } from "./local-json-store.service.js";
 import { MemoryService } from "./memory.service.js";
+import { ResearchSourceService } from "./research-source.service.js";
 import { WorkflowsService } from "./workflows.service.js";
 
 type ExtensionInvocationResponse = {
@@ -47,6 +54,7 @@ export class ExtensionsService {
     @Inject(MemoryService) private readonly memoryService: MemoryService,
     @Inject(ApprovalsService) private readonly approvalsService: ApprovalsService,
     @Inject(WorkflowsService) private readonly workflowsService: WorkflowsService,
+    @Inject(ResearchSourceService) private readonly researchSourceService: ResearchSourceService,
     @Inject(LocalJsonStore) private readonly store: LocalJsonStore
   ) {
     this.handlers = [
@@ -66,11 +74,13 @@ export class ExtensionsService {
         handle: async (request, audit) => {
           const approval = await this.ensureApproved(request, audit, "Create durable memory write candidate.");
           if (!approval.approved) return approval.response;
-          return this.completed(
+          const result = await this.memoryService.createCandidate(createMemoryCandidateSchema.parse(request.input));
+          return this.completedAfterApproval(
+            approval.approval,
             "local.memory",
             "memory.write_candidate",
             audit,
-            await this.memoryService.createCandidate(createMemoryCandidateSchema.parse(request.input))
+            result
           );
         }
       },
@@ -81,7 +91,8 @@ export class ExtensionsService {
           const approval = await this.ensureApproved(request, audit, "Promote a memory candidate into an accepted durable fact.");
           if (!approval.approved) return approval.response;
           const id = requiredString(request.input.id, "id");
-          return this.completed("local.memory", "memory.promote_fact", audit, await this.memoryService.promote(id, promoteMemorySchema.parse(request.input)));
+          const result = await this.memoryService.promote(id, promoteMemorySchema.parse(request.input));
+          return this.completedAfterApproval(approval.approval, "local.memory", "memory.promote_fact", audit, result);
         }
       },
       {
@@ -91,7 +102,8 @@ export class ExtensionsService {
           const approval = await this.ensureApproved(request, audit, "Update a durable memory entry.");
           if (!approval.approved) return approval.response;
           const id = requiredString(request.input.id, "id");
-          return this.completed("local.memory", "memory.update", audit, await this.memoryService.update(id, updateMemorySchema.parse(request.input)));
+          const result = await this.memoryService.update(id, updateMemorySchema.parse(request.input));
+          return this.completedAfterApproval(approval.approval, "local.memory", "memory.update", audit, result);
         }
       },
       {
@@ -100,7 +112,8 @@ export class ExtensionsService {
         handle: async (request, audit) => {
           const approval = await this.ensureApproved(request, audit, "Merge related memory entries and tombstone superseded sources.");
           if (!approval.approved) return approval.response;
-          return this.completed("local.memory", "memory.merge", audit, await this.memoryService.merge(mergeMemorySchema.parse(request.input)));
+          const result = await this.memoryService.merge(mergeMemorySchema.parse(request.input));
+          return this.completedAfterApproval(approval.approval, "local.memory", "memory.merge", audit, result);
         }
       },
       {
@@ -136,6 +149,64 @@ export class ExtensionsService {
             audit,
             await this.workflowsService.runProjectDocSearch(projectDocSearchSchema.parse(request.input))
           )
+      },
+      {
+        extensionId: "personal.research",
+        capabilityId: "research.run",
+        handle: async (request, audit) =>
+          this.completed(
+            "personal.research",
+            "research.run",
+            audit,
+            await this.workflowsService.runResearch(researchRequestSchema.parse(request.input))
+          )
+      },
+      {
+        extensionId: "personal.briefing",
+        capabilityId: "briefing.recent_research",
+        handle: async (request, audit) => {
+          const input = researchBriefingSchema.parse(request.input);
+          return this.completed("personal.briefing", "briefing.recent_research", audit, await this.workflowsService.recentResearchBriefing(input.limit));
+        }
+      },
+      {
+        extensionId: "personal.research",
+        capabilityId: "research.import_source",
+        handle: async (request, audit) => {
+          const approval = await this.ensureApproved(request, audit, "Import user-provided research content into the local source store.");
+          if (!approval.approved) return approval.response;
+          const result = await this.researchSourceService.importUserSource(researchImportSourceSchema.parse(request.input));
+          return this.completedAfterApproval(approval.approval, "personal.research", "research.import_source", audit, result);
+        }
+      },
+      {
+        extensionId: "personal.research",
+        capabilityId: "research.fetch_web_source",
+        handle: async (request, audit) => {
+          const approval = await this.ensureApproved(request, audit, "Fetch one allowlisted remote research source and retain its provenance locally.");
+          if (!approval.approved) return approval.response;
+          const result = await this.researchSourceService.fetchWebSource(researchFetchWebSourceSchema.parse(request.input));
+          return this.completedAfterApproval(approval.approval, "personal.research", "research.fetch_web_source", audit, result);
+        }
+      },
+      {
+        extensionId: "personal.research",
+        capabilityId: "research.search_web",
+        handle: async (request, audit) => {
+          const input = researchWebSearchSchema.parse(request.input);
+          const approval = await this.ensureApproved(request, audit, "Search the web with the configured Tavily connector and create a cited research report.");
+          if (!approval.approved) return approval.response;
+          const result = await this.workflowsService.runWebResearch(input);
+          return this.completedAfterApproval(approval.approval, "personal.research", "research.search_web", audit, result);
+        }
+      },
+      {
+        extensionId: "personal.research",
+        capabilityId: "research.get_report",
+        handle: async (request, audit) => {
+          const input = researchGetReportSchema.parse(request.input);
+          return this.completed("personal.research", "research.get_report", audit, await this.workflowsService.getResearchReport(input.workflowId));
+        }
       },
       {
         extensionId: "local.project",
@@ -194,7 +265,7 @@ export class ExtensionsService {
     const audit = buildPermissionAudit(id, requestedCapabilityId, findCapability(extension.capabilities, requestedCapabilityId));
 
     const handler = this.handlers.find((item) => item.extensionId === id && item.capabilityId === requestedCapabilityId);
-    if (handler) return handler.handle(request, audit);
+    if (handler) return handler.handle({ ...request, input: parseExtensionCapabilityInput(id, requestedCapabilityId, request.input) }, audit);
 
     if (id === "local.speech") {
       return {
@@ -220,15 +291,28 @@ export class ExtensionsService {
     };
   }
 
+  private async completedAfterApproval(
+    approval: { id: string } | undefined,
+    extensionId: string,
+    capabilityId: string,
+    permissionAudit: ExtensionInvocationAudit,
+    result: unknown
+  ) {
+    if (approval) await this.approvalsService.consumeApproved(approval.id);
+    return this.completed(extensionId, capabilityId, permissionAudit, result);
+  }
+
   private async ensureApproved(request: InvokeExtensionInput, audit: ExtensionInvocationAudit, reason: string) {
-    if (audit.mode === "read_only") return { approved: true as const };
+    if (audit.mode === "read_only") return { approved: true as const, approval: undefined };
     if (request.approvalId) {
       const approved = await this.approvalsService.requireApprovedFor(request.approvalId, {
         extensionId: audit.extensionId,
         capabilityId: audit.capabilityId,
-        input: request.input
+        input: request.input,
+        idempotencyKey: request.idempotencyKey,
+        sessionId: request.sessionId
       });
-      if (approved) return { approved: true as const };
+      if (approved) return { approved: true as const, approval: approved };
     }
     const approval = await this.approvalsService.create({
       extensionId: audit.extensionId,
@@ -236,7 +320,10 @@ export class ExtensionsService {
       action: `${audit.extensionId}.${audit.capabilityId}`,
       reason,
       permissions: audit.permissions,
-      input: request.input
+      input: request.input,
+      executionPolicy: "single_use",
+      idempotencyKey: request.idempotencyKey,
+      sessionId: request.sessionId
     });
     return {
       approved: false as const,

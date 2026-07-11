@@ -1,8 +1,20 @@
 import { BadRequestException, Inject, Injectable, NotFoundException } from "@nestjs/common";
-import { projectDocSearchSchema, type ProjectDocSearchInput, type WorkflowNodeEvent, type WorkflowRun } from "@sp-agent/shared";
+import {
+  projectDocSearchSchema,
+  researchReportSchema,
+  researchRequestSchema,
+  researchWebSearchSchema,
+  type ProjectDocSearchInput,
+  type ResearchRequest,
+  type ResearchWebSearchInput,
+  type WorkflowNodeEvent,
+  type WorkflowRun
+} from "@sp-agent/shared";
 import { readFile } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 import { LocalJsonStore } from "./local-json-store.service.js";
+import { ResearchService } from "./research.service.js";
+import { ResearchSourceService } from "./research-source.service.js";
 
 type WorkflowsFile = {
   workflows: WorkflowRun[];
@@ -19,7 +31,11 @@ const STALE_WORKFLOW_MS = 5 * 60 * 1000;
 
 @Injectable()
 export class WorkflowsService {
-  constructor(@Inject(LocalJsonStore) private readonly store: LocalJsonStore) {}
+  constructor(
+    @Inject(LocalJsonStore) private readonly store: LocalJsonStore,
+    @Inject(ResearchService) private readonly researchService: ResearchService,
+    @Inject(ResearchSourceService) private readonly researchSourceService: ResearchSourceService
+  ) {}
 
   async list() {
     await this.recoverStaleWorkflows();
@@ -49,8 +65,16 @@ export class WorkflowsService {
 
   async retry(id: string) {
     const workflow = await this.get(id);
-    if (workflow.kind !== "local.project.search_docs") throw new BadRequestException(`Workflow ${workflow.kind} is not retryable by this runner`);
-    return this.runProjectDocSearch(workflow.input as ProjectDocSearchInput, { retriedFrom: id });
+    if (workflow.kind === "local.project.search_docs") {
+      return this.runProjectDocSearch(projectDocSearchSchema.parse(workflow.input), { retriedFrom: id });
+    }
+    if (workflow.kind === "personal.research.run") {
+      if ((workflow.input as Record<string, unknown>).remoteSearch === "tavily") {
+        return this.runWebResearch(researchWebSearchSchema.parse(workflow.input), { retriedFrom: id });
+      }
+      return this.runResearch(researchRequestSchema.parse(workflow.input), { retriedFrom: id });
+    }
+    throw new BadRequestException(`Workflow ${workflow.kind} is not retryable by this runner`);
   }
 
   async startProjectDocSearch(input: ProjectDocSearchInput) {
@@ -69,11 +93,69 @@ export class WorkflowsService {
     return { workflow: await this.get(workflow.id) };
   }
 
-  private async createWorkflow(input: ProjectDocSearchInput, status: WorkflowRun["status"], metadata: Record<string, unknown> = {}) {
+  async startResearch(input: ResearchRequest) {
+    const workflow = await this.createWorkflow(input, "pending", {}, "personal.research.run");
+    setImmediate(() => {
+      this.executeResearch(workflow.id).catch((error) => {
+        console.error(`Research workflow ${workflow.id} failed`, error);
+      });
+    });
+    return { workflow };
+  }
+
+  async runResearch(input: ResearchRequest, metadata: Record<string, unknown> = {}) {
+    const workflow = await this.createWorkflow(input, "running", metadata, "personal.research.run");
+    await this.executeResearch(workflow.id);
+    return { workflow: await this.get(workflow.id) };
+  }
+
+  async runWebResearch(input: ResearchWebSearchInput, metadata: Record<string, unknown> = {}) {
+    const request: ResearchRequest = {
+      question: input.question,
+      sessionId: input.sessionId,
+      sourceScopes: ["local_documents", "bookmarks", "web"],
+      sourceIds: [],
+      maxSources: 12,
+      reportFormat: "brief",
+      strategy: "deterministic"
+    };
+    const workflow = await this.createWorkflow(
+      { ...request, remoteSearch: "tavily", maxResults: input.maxResults },
+      "running",
+      metadata,
+      "personal.research.run"
+    );
+    await this.executeResearch(workflow.id);
+    return { workflow: await this.get(workflow.id) };
+  }
+
+  async getResearchReport(id: string) {
+    const workflow = await this.get(id);
+    if (workflow.kind !== "personal.research.run") throw new BadRequestException(`Workflow ${id} is not a research run`);
+    if (!workflow.result) throw new BadRequestException(`Research workflow ${id} does not have a report yet`);
+    return { workflow, report: researchReportSchema.parse(workflow.result) };
+  }
+
+  async recentResearchBriefing(limit: number) {
+    const workflows = (await this.list()).filter((workflow) => workflow.kind === "personal.research.run").slice(0, limit);
+    return {
+      runs: workflows.map((workflow) => {
+        const report = workflow.result ? researchReportSchema.safeParse(workflow.result).data : undefined;
+        return { workflowId: workflow.id, status: workflow.status, question: report?.request.question, answer: report?.answer, degradedReason: workflow.degradedReason, updatedAt: workflow.updatedAt };
+      })
+    };
+  }
+
+  private async createWorkflow(
+    input: Record<string, unknown>,
+    status: WorkflowRun["status"],
+    metadata: Record<string, unknown> = {},
+    kind = "local.project.search_docs"
+  ) {
     const now = new Date().toISOString();
     const workflow: WorkflowRun = {
       id: `workflow_${crypto.randomUUID()}`,
-      kind: "local.project.search_docs",
+      kind,
       status,
       input,
       createdAt: now,
@@ -82,7 +164,9 @@ export class WorkflowsService {
       nodeEvents: [
         makeNodeEvent(
           "start",
-          status === "pending" ? "Queue project document search" : "Start project document search",
+          status === "pending"
+            ? kind === "personal.research.run" ? "Queue research workflow" : "Queue project document search"
+            : kind === "personal.research.run" ? "Start research workflow" : "Start project document search",
           status === "pending" ? "pending" : "completed",
           { input, ...metadata },
           status === "running" ? now : undefined,
@@ -138,6 +222,44 @@ export class WorkflowsService {
       workflow.nodeEvents.push(makeNodeEvent("error", "Workflow failed", "failed", {}, undefined, completedAt, workflow.error));
     }
 
+    await this.replaceWorkflow(workflow);
+  }
+
+  private async executeResearch(id: string) {
+    const file = await this.readFile();
+    const workflow = findWorkflow(file, id);
+    if (workflow.status === "cancelled") return;
+    if (workflow.status === "pending") {
+      const now = new Date().toISOString();
+      workflow.status = "running";
+      workflow.startedAt = now;
+      workflow.updatedAt = now;
+      workflow.nodeEvents.push(makeNodeEvent("run", "Run queued research workflow", "running", {}, now));
+      await this.replaceWorkflow(workflow);
+    }
+    try {
+      const input = researchRequestSchema.parse(workflow.input);
+      const remoteSearch = (workflow.input as Record<string, unknown>).remoteSearch === "tavily"
+        ? await this.researchSourceService.searchWeb(researchWebSearchSchema.parse(workflow.input))
+        : undefined;
+      const execution = await this.researchService.execute(input, workflow.id, remoteSearch);
+      for (const node of execution.nodes) {
+        workflow.nodeEvents.push(makeNodeEvent(node.nodeId, node.label, "completed", node.payload, undefined, undefined, undefined, node.degradedReason));
+      }
+      workflow.result = execution.report;
+      workflow.degradedReason = execution.report.degradedReason;
+      const completedAt = new Date().toISOString();
+      workflow.status = "completed";
+      workflow.updatedAt = completedAt;
+      workflow.completedAt = completedAt;
+    } catch (error) {
+      const completedAt = new Date().toISOString();
+      workflow.status = "failed";
+      workflow.updatedAt = completedAt;
+      workflow.completedAt = completedAt;
+      workflow.error = error instanceof Error ? error.message : "Research workflow failed.";
+      workflow.nodeEvents.push(makeNodeEvent("error", "Research workflow failed", "failed", {}, undefined, completedAt, workflow.error));
+    }
     await this.replaceWorkflow(workflow);
   }
 
@@ -206,7 +328,8 @@ function makeNodeEvent(
   payload: Record<string, unknown> = {},
   startedAt?: string,
   completedAt?: string,
-  error?: string
+  error?: string,
+  degradedReason?: string
 ): WorkflowNodeEvent {
   const now = new Date().toISOString();
   return {
@@ -216,6 +339,7 @@ function makeNodeEvent(
     status,
     payload,
     error,
+    degradedReason,
     createdAt: now,
     startedAt: startedAt ?? now,
     completedAt: completedAt ?? now

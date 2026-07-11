@@ -6,7 +6,7 @@ import {
   streamPersonalAgentTurnWithAgent
 } from "@sp-agent/agent-runtime";
 import type { PersonalAgentExtensionInvokeRequest, PersonalAgentTurnInput, PersonalAgentTurnResult } from "@sp-agent/agent-runtime";
-import type { AgentMessageResponse, AgentShellStatus, CreateAgentMessageInput, MemorySearchResult } from "@sp-agent/shared";
+import type { AgentMessageResponse, AgentShellStatus, CreateAgentMessageInput, ExtensionManifest, MemorySearchResult } from "@sp-agent/shared";
 import { ChatService } from "./chat.service.js";
 import { ExtensionsService, isReadOnlyExtensionCapability } from "./extensions.service.js";
 import { MemoryService } from "./memory.service.js";
@@ -51,7 +51,8 @@ export class AgentShellService {
       degradedReason: result.degradedReason,
       memoryContext: prepared.memoryContext,
       activeTools: result.activeTools ?? [],
-      toolCalls: result.toolCalls ?? []
+      toolCalls: result.toolCalls ?? [],
+      artifacts: result.artifacts ?? []
     };
   }
 
@@ -80,7 +81,8 @@ export class AgentShellService {
           degradedReason: event.result.degradedReason,
           memoryContext: prepared.memoryContext,
           activeTools: event.result.activeTools ?? [],
-          toolCalls: event.result.toolCalls ?? []
+          toolCalls: event.result.toolCalls ?? [],
+          artifacts: event.result.artifacts ?? []
         }
       };
     }
@@ -105,25 +107,34 @@ export class AgentShellService {
       input.extensionIds.length > 0
         ? extensionStatus.extensions.filter((extension) => input.extensionIds.includes(extension.id))
         : extensionStatus.extensions;
+    const agentVisibleExtensions = allowedExtensions
+      .map((extension) => ({
+        ...extension,
+        capabilities: extension.capabilities.filter((capability) =>
+          isReadOnlyExtensionCapability(this.extensionsService.getInvocationAudit(extension.id, capability.id)) ||
+          isApprovalProposalCapability(extension.id, capability.id)
+        )
+      }))
+      .filter((extension) => extension.capabilities.length > 0) as ExtensionManifest[];
     const turnInput: PersonalAgentTurnInput = {
       message: input.content,
       sessionId: session.id,
       memoryContext,
-      extensionManifests: allowedExtensions,
+      extensionManifests: agentVisibleExtensions,
       safetyModel: extensionStatus.safetyModel,
-      extensionInvoker: (request) => this.invokeReadOnlyExtension(request)
+      extensionInvoker: (request) => this.invokeAgentExtension(request)
     };
     return { sessionId: session.id, memoryContext, turnInput };
   }
 
-  private async invokeReadOnlyExtension(request: PersonalAgentExtensionInvokeRequest) {
+  private async invokeAgentExtension(request: PersonalAgentExtensionInvokeRequest) {
     const audit = this.extensionsService.getInvocationAudit(request.extensionId, request.capabilityId);
-    if (!isReadOnlyExtensionCapability(audit)) {
+    if (!isReadOnlyExtensionCapability(audit) && !isApprovalProposalCapability(request.extensionId, request.capabilityId)) {
       return {
         ok: false,
         status: "denied",
         permissionAudit: audit,
-        degradedReason: "This agent turn only allows read-only/search extension capabilities."
+        degradedReason: "This agent turn may only execute read-only capabilities or propose an approval-gated web search."
       };
     }
     try {
@@ -160,10 +171,15 @@ export class AgentShellService {
         memoryContextCount: memoryContext.length,
         memoryContextDebug: memoryContext.map(toMemoryContextDebug),
         activeTools: result.activeTools ?? [],
-        toolCalls: result.toolCalls ?? []
+        toolCalls: result.toolCalls ?? [],
+        artifacts: result.artifacts ?? []
       }
     });
   }
+}
+
+function isApprovalProposalCapability(extensionId: string, capabilityId: string) {
+  return extensionId === "personal.research" && capabilityId === "research.search_web";
 }
 
 function makeSessionTitle(content: string) {

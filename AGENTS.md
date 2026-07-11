@@ -2,9 +2,9 @@
 
 ## Product Boundary
 
-This repository is a local-first, chat-first personal agent base. The active product is a desktop chat surface backed by a local NestJS gateway, replaceable agent runtimes, permissioned skills, app-owned memory, observable workflows, and API-owned speech boundaries.
+This repository is a local-first, chat-first personal agent platform. Its first flagship product capability is a Research and Decision Agent: it gathers explicitly allowed evidence, identifies gaps or conflicts, produces cited conclusions, and asks before creating durable memory or taking any external action.
 
-Old Web3/research surfaces are out of scope. Do not restore their routes, packages, scripts, registry entries, or UI unless the user explicitly reintroduces that domain as a new personal-agent skill.
+The extension/runtime architecture remains general-purpose, but new work must strengthen the `personal.research` path before adding unrelated skills. Old Web3 and removed research surfaces remain out of scope. Do not restore their routes, packages, scripts, registry entries, or UI; rebuild research only through the current extension, approval, memory, and workflow boundaries.
 
 ## Active Workspace
 
@@ -24,6 +24,9 @@ Old Web3/research surfaces are out of scope. Do not restore their routes, packag
 - All capabilities enter through `packages/extensions`, declare typed input/output, return `permissionAudit`, and degrade explicitly when unavailable.
 - Read-only extension calls may execute directly. Write/provider/destructive calls must return `pending_approval` unless invoked with a matching approved `approvalId`.
 - Memory is app-owned, searchable, auditable, reversible, and exposed to runtimes only through typed read paths unless the user approves a write.
+- Research claims must be evidence-backed. Preserve source identity, source type, excerpt or locator, retrieval time, and confidence; surface insufficient or conflicting evidence instead of inventing a conclusion.
+- Research workflows execute in the API control plane. A runtime may request a scoped research capability, but it must not fetch sources, persist reports, or promote research findings by itself.
+- Remote retrieval, credentialed connectors, and any provider call that sends user data require an explicit scoped policy and an audit record. Do not introduce unrestricted browser automation.
 - Voice is a chat interaction layer: microphone capture -> STT -> normal agent turn with memory/tools -> TTS -> playback. Do not place speech provider logic inside runtime adapters.
 - LangGraph may be introduced later inside a skill/workflow adapter, but it must not bypass the API gateway, permission model, memory layer, or extension registry.
 
@@ -33,7 +36,7 @@ Old Web3/research surfaces are out of scope. Do not restore their routes, packag
 - Put shell/runtime/panel code under `apps/web/src/app` and `apps/web/src/components/app`.
 - Use assistant-ui primitives for chat state where possible.
 - Use shadcn/base UI and Tailwind utility classes before adding custom CSS.
-- Keep the first screen compact and chat-first; memory, approvals, skills, workflows, and voice should remain small header/composer surfaces, not a separate dashboard.
+- Keep the first screen compact and chat-first; Agent-selected read-only Skills run from normal conversation. Memory, approvals, skills, workflows, and voice remain small review/configuration surfaces, not per-Skill launch flows or a separate dashboard.
 - Preserve stable `data-testid` anchors when changing shell navigation or core review panels.
 
 ## Safety Rules
@@ -51,6 +54,7 @@ Old Web3/research surfaces are out of scope. Do not restore their routes, packag
 - Keep `ARCHITECTURE.md` focused on boundaries and contracts, not implementation history.
 - When adding a capability, register it in `packages/extensions` before making it a first-class agent skill.
 - Keep `local.project` read-only and restricted to explicitly allowlisted project documents until a broader file permission model exists.
+- Keep the first `personal.research` release local-first: allowlisted documents, local bookmarks, and user-provided sources. Add remote source connectors one at a time, read-only, with source-specific permission and degraded states.
 - Be selective with smoke tests. Run `pnpm typecheck` and `pnpm build` for broad confidence; run the relevant smoke only for the boundary you touched:
   - API/control plane: `pnpm smoke:api`
   - renderer routes/shell anchors: `pnpm smoke:web`
@@ -63,7 +67,7 @@ Old Web3/research surfaces are out of scope. Do not restore their routes, packag
 
 ## Priority Order
 
-1. Keep memory useful, auditable, and safe.
-2. Keep memory review and approval UX visible in the chat shell.
-3. Expand skills/workflows only through the extension boundary.
-4. Optimize voice later; do not let it outrun memory, approval, and skill stability.
+1. Deliver an evidence-backed, inspectable Research and Decision Agent workflow.
+2. Keep memory, source provenance, approvals, and research conclusions auditable and reversible.
+3. Expand skills/workflows only through the extension boundary and prove extensibility with small reference skills.
+4. Optimize voice and add unrelated personal-agent capabilities only after research reliability and evaluation are stable.

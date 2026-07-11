@@ -13,7 +13,7 @@ async function main() {
   const turn = await runPersonalAgentTurnWithAgent(
     {
       message: "现在项目是什么状态？",
-      extensionManifests: [{ id: "core.agent-shell", capabilities: [{ id: "extensions.inspect" }] }],
+      extensionManifests: [{ id: "core.agent-shell", status: "active", capabilities: [{ id: "extensions.inspect", label: "Inspect extensions", description: "Inspect the local registry" }] }],
       safetyModel: { defaultToolPolicy: "read_only" }
     },
     {
@@ -24,6 +24,8 @@ async function main() {
   assert(turn.provider === "pi", `expected pi turn provider, got ${turn.provider}`);
   assert(Boolean(turn.degradedReason), "expected missing config turn to degrade");
   assert(turn.activeTools?.includes("inspect_extension_registry"), "expected registry inspection tool to be exposed");
+  assert(turn.activeTools?.includes("core_agent_shell_extensions_inspect"), "expected manifest capability to receive a dedicated runtime tool");
+  assert(!turn.activeTools?.includes("invoke_extension_capability"), "generic capability invocation should not be exposed to the runtime");
 
   const adapters = listRuntimeAdapters();
   assert(adapters.some((adapter) => adapter.id === "pi" && adapter.default), "expected default Pi runtime adapter");
@@ -49,6 +51,44 @@ async function main() {
   assert(localTurn.provider === "local-deterministic", `expected local deterministic turn, got ${localTurn.provider}`);
   assert(!localTurn.content.includes("可见扩展"), "local deterministic turn should not expose extension counts");
   assert(!localTurn.content.includes("检索到相关记忆"), "local deterministic turn should not expose memory retrieval counts");
+
+  const researchReport = {
+    id: "report_smoke",
+    workflowId: "workflow_smoke",
+    answer: "本地资料支持该结论。",
+    claims: [],
+    sources: [],
+    evidence: [],
+    uncertainty: ["来源范围仅限本地资料。"],
+    openQuestions: [],
+    provider: "deterministic",
+    metrics: { citedClaimCount: 0 },
+    createdAt: new Date().toISOString(),
+    completedAt: new Date().toISOString()
+  };
+  const routedTurn = await runPersonalAgentTurnWithAgent(
+    {
+      message: "帮我调研本地项目架构，并给出证据。",
+      sessionId: "runtime_smoke",
+      extensionManifests: [{
+        id: "personal.research",
+        status: "active",
+        capabilities: [
+          { id: "research.run", label: "Run research", description: "Research", inputSchema: "researchRequestSchema" },
+          { id: "research.search_web", label: "Search web", description: "Propose an approved web search", inputSchema: "researchWebSearchSchema" }
+        ]
+      }],
+      extensionInvoker: async (request) => {
+        if (request.capabilityId === "research.search_web") return { ok: true, status: "pending_approval" };
+        return { ok: true, status: "completed", result: { workflow: { id: "workflow_smoke", result: researchReport } } };
+      }
+    },
+    { AGENT_RUNTIME_PROVIDER: "local-deterministic" }
+  );
+  assert(routedTurn.toolCalls?.[0]?.toolName === "personal_research_research_run", "research intent should invoke the dedicated research tool");
+  assert(routedTurn.toolCalls?.[1]?.toolName === "personal_research_research_search_web", "insufficient local research should propose a scoped web search");
+  assert(routedTurn.content.includes("已请求批准使用网页搜索"), "research fallback should direct the user to approve the scoped web search");
+  assert(routedTurn.artifacts?.[0]?.workflowId === "workflow_smoke", "research intent should return a persisted artifact payload");
 
   console.log(
     JSON.stringify(

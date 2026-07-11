@@ -6,11 +6,19 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { apiBase, fetchJson } from "@/app/api";
 import type { ApprovalRequest, ExtensionInvocationResponse } from "@/app/types";
 
+type CompletedResearchSummary = {
+  answer: string;
+  sourceCount: number;
+  citedClaimCount: number;
+  degradedReason?: string;
+};
+
 export function ApprovalReview() {
   const [open, setOpen] = useState(false);
   const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
+  const [completedResearch, setCompletedResearch] = useState<CompletedResearchSummary | null>(null);
 
   const pending = approvals.filter((approval) => approval.status === "pending");
 
@@ -52,7 +60,10 @@ export function ApprovalReview() {
         body: JSON.stringify({ decision, reason: "Reviewed in renderer approval queue." })
       });
       if (decision === "approved") {
-        await executeApprovedAction(data.approval);
+        const result = await executeApprovedAction(data.approval);
+        setCompletedResearch(result ? toCompletedResearchSummary(result) : null);
+      } else {
+        setCompletedResearch(null);
       }
       await refreshApprovals();
       setStatus(decision === "approved" ? "Approved and executed" : "Denied");
@@ -76,6 +87,7 @@ export function ApprovalReview() {
       throw new Error(result.degradedReason ?? `Approved action returned ${result.status}`);
     }
     window.dispatchEvent(new CustomEvent("sp-agent:approval-executed", { detail: approval }));
+    return result;
   }
 
   return (
@@ -105,6 +117,15 @@ export function ApprovalReview() {
           </Button>
         </div>
         {status && <p className="approvalStatus" data-testid="approval-review-status">{status}</p>}
+        {completedResearch && (
+          <section className="border-b border-border px-5 py-4 text-sm" data-testid="approved-research-result">
+            <p className="font-medium text-foreground">{completedResearch.answer}</p>
+            <p className="mt-2 text-xs text-muted-foreground">
+              {completedResearch.sourceCount} sources · {completedResearch.citedClaimCount} cited claims
+            </p>
+            {completedResearch.degradedReason && <p className="mt-2 text-xs text-muted-foreground">{completedResearch.degradedReason}</p>}
+          </section>
+        )}
         <div className="approvalList" data-testid="approval-list">
           {pending.length === 0 ? (
             <div className="approvalEmpty">No pending approvals</div>
@@ -144,4 +165,23 @@ export function ApprovalReview() {
       </SheetContent>
     </Sheet>
   );
+}
+
+function toCompletedResearchSummary(response: ExtensionInvocationResponse): CompletedResearchSummary | null {
+  const report = (response.result as {
+    workflow?: {
+      result?: {
+        answer?: unknown;
+        degradedReason?: unknown;
+        metrics?: { sourceCount?: unknown; citedClaimCount?: unknown };
+      };
+    };
+  } | null)?.workflow?.result;
+  if (!report || typeof report.answer !== "string") return null;
+  return {
+    answer: report.answer,
+    sourceCount: typeof report.metrics?.sourceCount === "number" ? report.metrics.sourceCount : 0,
+    citedClaimCount: typeof report.metrics?.citedClaimCount === "number" ? report.metrics.citedClaimCount : 0,
+    degradedReason: typeof report.degradedReason === "string" ? report.degradedReason : undefined
+  };
 }

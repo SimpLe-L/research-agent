@@ -218,7 +218,8 @@ try {
 
   const writeAudit = await post(`${baseUrl}/extensions/local.memory/invoke`, {
     capabilityId: "memory.write_candidate",
-    input: { content: "通过扩展写入的记忆。", source: { type: "system" } }
+    input: { content: "通过扩展写入的记忆。", source: { type: "system" } },
+    idempotencyKey: "memory-smoke-approved-write"
   });
   assert(writeAudit.permissionAudit.mode === "write_or_provider", "memory write should not be read-only");
   assert(writeAudit.status === "pending_approval", "memory write through extension should require approval");
@@ -233,9 +234,22 @@ try {
   const approvedWrite = await post(`${baseUrl}/extensions/local.memory/invoke`, {
     capabilityId: "memory.write_candidate",
     approvalId: writeAudit.approval.id,
-    input: { content: "通过审批后扩展写入的记忆。", source: { type: "system" } }
+    input: writeAudit.approval.input,
+    idempotencyKey: writeAudit.approval.idempotencyKey
   });
   assert(approvedWrite.status === "completed", "approved memory write should complete");
+  await expectPostFailure(`${baseUrl}/extensions/local.memory/invoke`, {
+    capabilityId: "memory.write_candidate",
+    approvalId: writeAudit.approval.id,
+    input: writeAudit.approval.input,
+    idempotencyKey: writeAudit.approval.idempotencyKey
+  }, 400);
+  await expectPostFailure(`${baseUrl}/extensions/local.memory/invoke`, {
+    capabilityId: "memory.write_candidate",
+    approvalId: writeAudit.approval.id,
+    input: { ...writeAudit.approval.input, content: "被篡改的审批输入。" },
+    idempotencyKey: writeAudit.approval.idempotencyKey
+  }, 400);
 
   await del(`${baseUrl}/memory/${merged.memory.id}`);
   const afterDelete = await get(`${baseUrl}/memory/search?query=${encodeURIComponent("本地优先")}&sessionId=${session.id}&statuses=active`);
@@ -276,6 +290,16 @@ async function post(url, body) {
     body: JSON.stringify(body)
   });
   return readJson(response, url);
+}
+
+async function expectPostFailure(url, body, status) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  const text = await response.text();
+  assert(response.status === status, `${url} expected ${status} but received ${response.status}: ${text}`);
 }
 
 async function patch(url, body) {

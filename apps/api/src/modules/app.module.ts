@@ -15,6 +15,8 @@ import { MemoryIntelligenceService } from "./memory-intelligence.service.js";
 import { MemoryService } from "./memory.service.js";
 import { MemoryVectorService } from "./memory-vector.service.js";
 import { ProvidersController } from "./providers.controller.js";
+import { ResearchService } from "./research.service.js";
+import { ResearchSourceService } from "./research-source.service.js";
 import { SettingsController } from "./settings.controller.js";
 import { SettingsService } from "./settings.service.js";
 import { VoiceAuditService } from "./voice-audit.service.js";
@@ -44,6 +46,8 @@ import { WorkflowsService } from "./workflows.service.js";
     MemoryIntelligenceService,
     MemoryEmbeddingService,
     MemoryVectorService,
+    ResearchSourceService,
+    ResearchService,
     AgentShellService,
     ExtensionsService,
     ApprovalsService,

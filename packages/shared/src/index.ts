@@ -244,10 +244,15 @@ export const approvalRequestSchema = z.object({
   reason: z.string(),
   permissions: z.array(z.string()).default([]),
   input: z.record(z.unknown()).default({}),
-  status: z.enum(["pending", "approved", "denied", "expired"]).default("pending"),
+  status: z.enum(["pending", "approved", "denied", "expired", "consumed"]).default("pending"),
+  executionPolicy: z.enum(["single_use", "reusable"]).default("single_use"),
+  idempotencyKey: z.string().min(1).max(128).optional(),
+  sessionId: z.string().min(1).max(160).optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
-  decidedAt: z.string().optional()
+  decidedAt: z.string().optional(),
+  expiresAt: z.string().optional(),
+  consumedAt: z.string().optional()
 });
 export type ApprovalRequest = z.infer<typeof approvalRequestSchema>;
 
@@ -257,7 +262,10 @@ export const createApprovalRequestSchema = z.object({
   action: z.string().min(1),
   reason: z.string().min(1),
   permissions: z.array(z.string()).default([]),
-  input: z.record(z.unknown()).default({})
+  input: z.record(z.unknown()).default({}),
+  executionPolicy: z.enum(["single_use", "reusable"]).default("single_use"),
+  idempotencyKey: z.string().min(1).max(128).optional(),
+  sessionId: z.string().min(1).max(160).optional()
 });
 export type CreateApprovalRequestInput = z.infer<typeof createApprovalRequestSchema>;
 
@@ -349,6 +357,129 @@ export const localBookmarkDigestSchema = z.object({
   limit: z.coerce.number().int().positive().max(20).default(10)
 });
 export type LocalBookmarkDigestInput = z.infer<typeof localBookmarkDigestSchema>;
+
+export const researchSourceScopeSchema = z.enum(["local_documents", "bookmarks", "user_provided", "web"]);
+export type ResearchSourceScope = z.infer<typeof researchSourceScopeSchema>;
+
+export const researchSourceTypeSchema = z.enum(["local_document", "bookmark", "user_import", "web", "memory"]);
+export type ResearchSourceType = z.infer<typeof researchSourceTypeSchema>;
+
+export const researchRequestSchema = z.object({
+  question: z.string().min(3).max(4_000),
+  sessionId: z.string().min(1).max(160).optional(),
+  sourceScopes: z.array(researchSourceScopeSchema).min(1).max(4).default(["local_documents", "bookmarks"]),
+  sourceIds: z.array(z.string().min(1).max(240)).max(100).default([]),
+  maxSources: z.coerce.number().int().positive().max(30).default(12),
+  reportFormat: z.enum(["brief", "detailed"]).default("brief"),
+  strategy: z.enum(["deterministic", "provider_assisted"]).default("deterministic")
+});
+export type ResearchRequest = z.infer<typeof researchRequestSchema>;
+
+export const researchSourceSchema = z.object({
+  id: z.string(),
+  type: researchSourceTypeSchema,
+  title: z.string(),
+  locator: z.string(),
+  retrievedAt: z.string(),
+  contentHash: z.string(),
+  contentPreview: z.string().optional(),
+  degradedReason: z.string().optional(),
+  metadata: z.record(z.unknown()).default({})
+});
+export type ResearchSource = z.infer<typeof researchSourceSchema>;
+
+export const researchEvidenceSchema = z.object({
+  id: z.string(),
+  sourceId: z.string(),
+  excerpt: z.string().min(1),
+  locator: z.string().optional(),
+  relevance: z.number().min(0).max(1),
+  confidence: z.number().min(0).max(1),
+  extractionMethod: z.enum(["deterministic", "provider", "manual"]),
+  queryTerms: z.array(z.string()).default([]),
+  createdAt: z.string()
+});
+export type ResearchEvidence = z.infer<typeof researchEvidenceSchema>;
+
+export const researchClaimSchema = z.object({
+  id: z.string(),
+  statement: z.string().min(1),
+  supportingEvidenceIds: z.array(z.string()).default([]),
+  conflictingEvidenceIds: z.array(z.string()).default([]),
+  confidence: z.number().min(0).max(1),
+  status: z.enum(["supported", "contested", "insufficient"])
+});
+export type ResearchClaim = z.infer<typeof researchClaimSchema>;
+
+export const researchMetricsSchema = z.object({
+  sourceCount: z.number().int().nonnegative(),
+  evidenceCount: z.number().int().nonnegative(),
+  citedClaimCount: z.number().int().nonnegative(),
+  unsupportedClaimCount: z.number().int().nonnegative(),
+  conflictingClaimCount: z.number().int().nonnegative(),
+  memoryCount: z.number().int().nonnegative(),
+  collectionMs: z.number().int().nonnegative(),
+  analysisMs: z.number().int().nonnegative(),
+  totalMs: z.number().int().nonnegative()
+});
+export type ResearchMetrics = z.infer<typeof researchMetricsSchema>;
+
+export const researchReportSchema = z.object({
+  id: z.string(),
+  workflowId: z.string(),
+  request: researchRequestSchema,
+  answer: z.string().min(1),
+  claims: z.array(researchClaimSchema).default([]),
+  sources: z.array(researchSourceSchema).default([]),
+  evidence: z.array(researchEvidenceSchema).default([]),
+  uncertainty: z.array(z.string()).default([]),
+  openQuestions: z.array(z.string()).default([]),
+  provider: z.enum(["deterministic", "provider_assisted"]),
+  degradedReason: z.string().optional(),
+  metrics: researchMetricsSchema,
+  createdAt: z.string(),
+  completedAt: z.string()
+});
+export type ResearchReport = z.infer<typeof researchReportSchema>;
+
+export const researchGetReportSchema = z.object({
+  workflowId: z.string().min(1)
+});
+export type ResearchGetReportInput = z.infer<typeof researchGetReportSchema>;
+
+export const researchPromoteClaimSchema = z.object({
+  workflowId: z.string().min(1),
+  claimId: z.string().min(1),
+  reason: z.string().min(1).default("User accepted a cited research conclusion as durable memory."),
+  tags: z.array(z.string()).max(12).default(["research"])
+});
+export type ResearchPromoteClaimInput = z.infer<typeof researchPromoteClaimSchema>;
+
+export const researchImportSourceSchema = z.object({
+  title: z.string().min(1).max(240),
+  content: z.string().min(1).max(200_000),
+  locator: z.string().max(2_000).optional(),
+  tags: z.array(z.string().min(1).max(64)).max(20).default([])
+});
+export type ResearchImportSourceInput = z.infer<typeof researchImportSourceSchema>;
+
+export const researchFetchWebSourceSchema = z.object({
+  url: z.string().url(),
+  title: z.string().min(1).max(240).optional()
+});
+export type ResearchFetchWebSourceInput = z.infer<typeof researchFetchWebSourceSchema>;
+
+export const researchWebSearchSchema = z.object({
+  question: z.string().min(3).max(4_000),
+  sessionId: z.string().min(1).max(160).optional(),
+  maxResults: z.coerce.number().int().positive().max(8).default(5)
+});
+export type ResearchWebSearchInput = z.infer<typeof researchWebSearchSchema>;
+
+export const researchBriefingSchema = z.object({
+  limit: z.coerce.number().int().positive().max(20).default(5)
+});
+export type ResearchBriefingInput = z.infer<typeof researchBriefingSchema>;
 
 export const speechProviderStatusSchema = z.object({
   name: z.string(),
@@ -473,7 +604,9 @@ export type ExtensionInvocationAudit = z.infer<typeof extensionInvocationAuditSc
 export const invokeExtensionSchema = z.object({
   capabilityId: z.string().optional(),
   input: z.record(z.unknown()).default({}),
-  approvalId: z.string().optional()
+  approvalId: z.string().optional(),
+  idempotencyKey: z.string().min(1).max(128).optional(),
+  sessionId: z.string().min(1).max(160).optional()
 });
 export type InvokeExtensionInput = z.infer<typeof invokeExtensionSchema>;
 
@@ -508,6 +641,15 @@ export const createAgentMessageSchema = z.object({
 });
 export type CreateAgentMessageInput = z.infer<typeof createAgentMessageSchema>;
 
+export const agentArtifactSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("research_report"),
+    workflowId: z.string(),
+    report: researchReportSchema
+  })
+]);
+export type AgentArtifact = z.infer<typeof agentArtifactSchema>;
+
 export const agentMessageResponseSchema = z.object({
   sessionId: z.string(),
   role: z.literal("assistant"),
@@ -517,6 +659,7 @@ export const agentMessageResponseSchema = z.object({
   degradedReason: z.string().optional(),
   memoryContext: z.array(memorySearchResultSchema).default([]),
   activeTools: z.array(z.string()).default([]),
-  toolCalls: z.array(z.record(z.unknown())).default([])
+  toolCalls: z.array(z.record(z.unknown())).default([]),
+  artifacts: z.array(agentArtifactSchema).default([])
 });
 export type AgentMessageResponse = z.infer<typeof agentMessageResponseSchema>;

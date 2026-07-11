@@ -99,7 +99,7 @@ function toAssistantThreadMessage(message: NonNullable<ThreadRecord["messages"]>
       content: message.content,
       createdAt: new Date(message.createdAt),
       status: message.role === "assistant" ? { type: "complete", reason: "stop" } : undefined,
-      metadata: { custom: { source: "api.chat.sessions" } }
+      metadata: { custom: { source: "api.chat.sessions", artifacts: message.metadata?.artifacts ?? [] } }
     },
     message.id ?? `api_msg_${index}`,
     { type: "complete", reason: "stop" }
@@ -262,9 +262,18 @@ export function useAgentAssistantRuntime() {
           if (event.type === "error") {
             throw new Error(event.message);
           }
+          if (event.result.toolCalls?.some((call) => call.toolName === "personal_research_research_search_web")) {
+            window.dispatchEvent(new Event("sp-agent:approval-requested"));
+          }
           const degraded = event.result.degradedReason ? `\n\n降级原因：${event.result.degradedReason}` : "";
           const finalText = `${event.result.content}${degraded}`;
-          if (finalText !== visibleText) yield { content: [{ type: "text", text: finalText }] };
+          const artifacts = event.result.artifacts ?? [];
+          if (finalText !== visibleText || artifacts.length > 0) {
+            yield {
+              content: [{ type: "text", text: finalText }],
+              metadata: { custom: { source: "agent.messages.stream", artifacts } }
+            } as never;
+          }
           if (!sessionId) await updateSessionTitle(event.sessionId, makeThreadTitle(content));
         }
       }

@@ -1,13 +1,20 @@
 import React from "react";
 import { ActionBarPrimitive, BranchPickerPrimitive, ComposerPrimitive, MessagePrimitive, ThreadPrimitive, useAuiState, type AssistantState } from "@assistant-ui/react";
-import { ArrowDown, ArrowUp, Check, ChevronDown, Copy, MoreHorizontal, Plus, RefreshCw, Square } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, BookOpenCheck, Check, ChevronDown, Copy, MoreHorizontal, Plus, RefreshCw, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { VoiceRecorderButton } from "./VoiceRecorderButton";
 import { cn } from "@/lib/utils";
+import type { AgentArtifact } from "@/app/types";
+
+const EMPTY_AGENT_ARTIFACTS: readonly AgentArtifact[] = [];
 
 function isNewChatView(state: AssistantState) {
   return state.thread.messages.length === 0 && (!state.thread.isLoading || state.threads.isLoading);
+}
+
+function messageArtifacts(state: AssistantState) {
+  return (state.message.metadata as { custom?: { artifacts?: AgentArtifact[] } } | undefined)?.custom?.artifacts ?? EMPTY_AGENT_ARTIFACTS;
 }
 
 export function AssistantThread() {
@@ -51,7 +58,7 @@ function AssistantEmptyState() {
   return (
     <div className="mb-2 text-center" data-testid="assistant-empty-state">
       <h1 className="animate-in fade-in slide-in-from-bottom-1 text-2xl font-semibold duration-200 md:text-[30px]">
-        How can I help you today?
+        What would you like to explore?
       </h1>
     </div>
   );
@@ -60,6 +67,7 @@ function AssistantEmptyState() {
 function AssistantThreadMessage() {
   const role = useAuiState((state) => state.message.role);
   const isRunning = useAuiState((state) => state.message.status?.type === "running");
+  const artifacts = useAuiState(messageArtifacts);
   return (
     <MessagePrimitive.Root
       data-role={role}
@@ -79,6 +87,7 @@ function AssistantThreadMessage() {
         )}
       >
         <AssistantMessageParts />
+        {role === "assistant" && artifacts.map((artifact) => <AgentArtifactView artifact={artifact} key={artifact.workflowId} />)}
       </div>
       {role === "assistant" && isRunning && (
         <span className="mt-2 inline-flex items-center gap-2.5 text-xs text-muted-foreground">
@@ -92,6 +101,36 @@ function AssistantThreadMessage() {
       )}
       <MessageActions role={role} />
     </MessagePrimitive.Root>
+  );
+}
+
+function AgentArtifactView({ artifact }: { artifact: AgentArtifact }) {
+  const { report } = artifact;
+  const citedClaims = report.claims.filter((claim) => claim.supportingEvidenceIds.length > 0).length;
+  return (
+    <section className="mt-4 border-l-2 border-emerald-600 bg-muted/35 px-3 py-3 text-sm" data-testid="agent-skill-artifact" data-artifact-kind={artifact.kind}>
+      <div className="flex items-center gap-2 font-medium text-foreground">
+        <BookOpenCheck className="size-4 text-emerald-700" />
+        <span>Research report</span>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+        <span>{report.metrics.sourceCount} sources</span>
+        <span>{report.metrics.evidenceCount} evidence</span>
+        <span>{citedClaims}/{report.claims.length} cited claims</span>
+      </div>
+      {(report.uncertainty.length > 0 || report.openQuestions.length > 0) && (
+        <p className="mt-2 flex items-start gap-1.5 text-xs leading-relaxed text-muted-foreground">
+          <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-amber-600" />
+          {report.uncertainty[0] ?? report.openQuestions[0]}
+        </p>
+      )}
+      <details className="mt-2 text-xs text-muted-foreground">
+        <summary className="cursor-pointer text-foreground">Evidence and citations</summary>
+        <ul className="mt-2 grid gap-1 pl-4">
+          {report.evidence.slice(0, 6).map((evidence) => <li key={evidence.id}>{evidence.excerpt}</li>)}
+        </ul>
+      </details>
+    </section>
   );
 }
 
@@ -148,7 +187,7 @@ function AssistantComposer() {
     <ComposerPrimitive.Root className="relative flex w-full flex-col" data-testid="assistant-composer">
       <div className="flex w-full flex-col gap-2 rounded-(--composer-radius) border border-border/70 bg-(--composer-bg) p-(--composer-padding) shadow-[0_4px_16px_-8px_rgb(0_0_0/0.1),0_1px_2px_rgb(0_0_0/0.04)] transition-[border-color,box-shadow] focus-within:border-border focus-within:shadow-[0_6px_24px_-8px_rgb(0_0_0/0.14),0_1px_2px_rgb(0_0_0/0.05)]">
         <ComposerPrimitive.Input
-          placeholder="Ask anything"
+          placeholder="Ask a question or explore a topic"
           rows={2}
           className="max-h-36 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base leading-relaxed outline-none placeholder:text-muted-foreground"
         />
@@ -158,17 +197,17 @@ function AssistantComposer() {
           </Button>
           <DropdownMenu>
             <DropdownMenuTrigger className="inline-flex h-8 min-w-0 items-center justify-center gap-2 rounded-full px-2.5 text-sm font-semibold text-foreground hover:bg-muted data-popup-open:bg-muted">
-              Base Agent
+              Pi runtime
               <ChevronDown className="size-4" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" sideOffset={8} className="min-w-48 p-1.5">
               <DropdownMenuItem className="justify-between rounded-lg px-2.5 py-2 font-medium">
-                <span>Base Agent</span>
+                <span>Pi runtime</span>
                 <Check className="size-4" />
               </DropdownMenuItem>
               <DropdownMenuItem className="justify-between rounded-lg px-2.5 py-2 text-muted-foreground" data-disabled>
-                <span>Pi Runtime</span>
-                <span className="text-xs">planned</span>
+                <span>Local deterministic fallback</span>
+                <span className="text-xs">available</span>
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

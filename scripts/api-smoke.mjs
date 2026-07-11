@@ -61,6 +61,7 @@ async function main() {
   assert(turn.sessionId === session.id, "expected agent turn to use requested chat session");
   assert(typeof turn.content === "string" && turn.content.length > 0, "expected assistant content");
   assert(turn.degradedReason, "expected missing-key degraded reason in smoke env");
+  assert(Array.isArray(turn.artifacts) && turn.artifacts.length === 0, "ordinary chat should not create a skill artifact");
 
   const savedSession = await readJson(`${base}/chat/sessions/${session.id}`);
   assert(savedSession.messages?.length === 2, "expected user and assistant messages to persist");
@@ -84,6 +85,18 @@ async function main() {
   const savedStreamSession = await readJson(`${base}/chat/sessions/${streamSession.id}`);
   assert(savedStreamSession.messages?.length === 2, "expected streamed user and assistant messages to persist");
   await deleteJson(`${base}/chat/sessions/${streamSession.id}`);
+
+  const researchSession = await postJson(`${base}/chat/sessions`, { title: "API research routing smoke" });
+  const researchTurn = await postJson(`${base}/agent/messages`, {
+    content: "帮我调研当前项目的架构，并给出证据和不确定项。",
+    sessionId: researchSession.id
+  });
+  assert(researchTurn.toolCalls?.some((call) => call.toolName === "personal_research_research_run"), "research intent should route to the research capability");
+  assert(researchTurn.artifacts?.length === 1 && researchTurn.artifacts[0].kind === "research_report", "research intent should return one research artifact");
+  assert(researchTurn.artifacts[0].report.evidence.length >= 0, "research artifact should include a report");
+  const savedResearchSession = await readJson(`${base}/chat/sessions/${researchSession.id}`);
+  assert(savedResearchSession.messages?.[1]?.metadata?.artifacts?.[0]?.kind === "research_report", "research artifact should persist with the assistant message");
+  await deleteJson(`${base}/chat/sessions/${researchSession.id}`);
 
   await stopApi();
   console.log(

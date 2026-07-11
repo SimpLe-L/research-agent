@@ -53,6 +53,13 @@ export type AgentMessageResponse = {
   degradedReason?: string;
   activeTools?: string[];
   toolCalls?: Array<Record<string, unknown>>;
+  artifacts?: AgentArtifact[];
+};
+
+export type AgentArtifact = {
+  kind: "research_report";
+  workflowId: string;
+  report: ResearchReport;
 };
 
 export type AgentStreamEvent =
@@ -90,7 +97,7 @@ export type ThreadRecord = {
   title: string;
   createdAt?: string;
   updatedAt: string;
-  messages?: Array<{ id?: string; role: string; content: string; createdAt: string }>;
+  messages?: Array<{ id?: string; role: string; content: string; metadata?: Record<string, unknown>; createdAt: string }>;
 };
 
 export type ApprovalRequest = {
@@ -101,10 +108,15 @@ export type ApprovalRequest = {
   reason: string;
   permissions: string[];
   input: Record<string, unknown>;
-  status: "pending" | "approved" | "denied" | "expired";
+  status: "pending" | "approved" | "denied" | "expired" | "consumed";
+  executionPolicy: "single_use" | "reusable";
+  idempotencyKey?: string;
+  sessionId?: string;
   createdAt: string;
   updatedAt: string;
   decidedAt?: string;
+  expiresAt?: string;
+  consumedAt?: string;
 };
 
 export type ExtensionInvocationResponse = {
@@ -150,6 +162,76 @@ export type WorkflowRun = {
   startedAt?: string;
   completedAt?: string;
   nodeEvents: WorkflowNodeEvent[];
+};
+
+export type ResearchSourceScope = "local_documents" | "bookmarks" | "user_provided" | "web";
+
+export type ResearchSource = {
+  id: string;
+  type: "local_document" | "bookmark" | "user_import" | "web" | "memory";
+  title: string;
+  locator: string;
+  retrievedAt: string;
+  contentHash: string;
+  contentPreview?: string;
+  degradedReason?: string;
+  metadata: Record<string, unknown>;
+};
+
+export type ResearchEvidence = {
+  id: string;
+  sourceId: string;
+  excerpt: string;
+  locator?: string;
+  relevance: number;
+  confidence: number;
+  extractionMethod: "deterministic" | "provider" | "manual";
+  queryTerms: string[];
+  createdAt: string;
+};
+
+export type ResearchClaim = {
+  id: string;
+  statement: string;
+  supportingEvidenceIds: string[];
+  conflictingEvidenceIds: string[];
+  confidence: number;
+  status: "supported" | "contested" | "insufficient";
+};
+
+export type ResearchReport = {
+  id: string;
+  workflowId: string;
+  request: {
+    question: string;
+    sessionId?: string;
+    sourceScopes: ResearchSourceScope[];
+    sourceIds: string[];
+    maxSources: number;
+    reportFormat: "brief" | "detailed";
+    strategy: "deterministic" | "provider_assisted";
+  };
+  answer: string;
+  claims: ResearchClaim[];
+  sources: ResearchSource[];
+  evidence: ResearchEvidence[];
+  uncertainty: string[];
+  openQuestions: string[];
+  provider: "deterministic" | "provider_assisted";
+  degradedReason?: string;
+  metrics: {
+    sourceCount: number;
+    evidenceCount: number;
+    citedClaimCount: number;
+    unsupportedClaimCount: number;
+    conflictingClaimCount: number;
+    memoryCount: number;
+    collectionMs: number;
+    analysisMs: number;
+    totalMs: number;
+  };
+  createdAt: string;
+  completedAt: string;
 };
 
 export type MemoryKind = "core" | "journal" | "summary" | "procedural" | "project";

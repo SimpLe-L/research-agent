@@ -33,6 +33,7 @@ const requiredBundleMarkers = [
   "skill-catalog-list",
   "skill-capability-list",
   "skill-safety-policy",
+  "agent-skill-artifact",
   "workflow-review-button",
   "workflow-review-panel",
   "workflow-list",

@@ -1,5 +1,5 @@
 import { Injectable } from "@nestjs/common";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
 @Injectable()
@@ -19,7 +19,9 @@ export class LocalJsonStore {
   async write<T>(name: string, value: T): Promise<void> {
     const file = this.pathFor(name);
     await mkdir(dirname(file), { recursive: true });
-    await writeFile(file, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+    const temporary = `${file}.${crypto.randomUUID()}.tmp`;
+    await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+    await rename(temporary, file);
   }
 
   pathFor(name: string): string {

@@ -1,5 +1,5 @@
 import { BadRequestException, Inject, Injectable, NotFoundException } from "@nestjs/common";
-import type { ApprovalRequest, CreateApprovalRequestInput, DecideApprovalRequestInput } from "@sp-agent/shared";
+import { approvalRequestSchema, type ApprovalRequest, type CreateApprovalRequestInput, type DecideApprovalRequestInput } from "@sp-agent/shared";
 import { LocalJsonStore } from "./local-json-store.service.js";
 
 type ApprovalsFile = {
@@ -11,7 +11,10 @@ export class ApprovalsService {
   constructor(@Inject(LocalJsonStore) private readonly store: LocalJsonStore) {}
 
   async list(status?: ApprovalRequest["status"]) {
-    const requests = (await this.readFile()).requests;
+    const file = await this.readFile();
+    const changed = expireRequests(file.requests);
+    if (changed) await this.writeFile(file);
+    const requests = file.requests;
     return (status ? requests.filter((request) => request.status === status) : requests).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
@@ -26,8 +29,12 @@ export class ApprovalsService {
       permissions: input.permissions,
       input: input.input,
       status: "pending",
+      executionPolicy: input.executionPolicy ?? "single_use",
+      idempotencyKey: input.idempotencyKey,
+      sessionId: input.sessionId,
       createdAt: now,
-      updatedAt: now
+      updatedAt: now,
+      expiresAt: approvalExpiry(now)
     };
     const file = await this.readFile();
     file.requests.push(request);
@@ -38,6 +45,11 @@ export class ApprovalsService {
   async decide(id: string, input: DecideApprovalRequestInput) {
     const file = await this.readFile();
     const request = findApproval(file, id);
+    if (expireRequest(request)) {
+      await this.writeFile(file);
+      throw new BadRequestException(`Approval request ${id} has expired`);
+    }
+    if (request.status !== "pending") throw new BadRequestException(`Approval request ${id} is already ${request.status}`);
     const now = new Date().toISOString();
     request.status = input.decision;
     request.updatedAt = now;
@@ -50,27 +62,85 @@ export class ApprovalsService {
   }
 
   async requireApproved(id: string) {
-    const request = findApproval(await this.readFile(), id);
+    const file = await this.readFile();
+    const request = findApproval(file, id);
+    if (expireRequest(request)) await this.writeFile(file);
     return request.status === "approved" ? request : undefined;
   }
 
-  async requireApprovedFor(id: string, input: { extensionId: string; capabilityId: string; input: Record<string, unknown> }) {
-    const request = findApproval(await this.readFile(), id);
-    if (request.status !== "approved") return undefined;
-    if (request.extensionId !== input.extensionId || request.capabilityId !== input.capabilityId || stableStringify(request.input) !== stableStringify(input.input)) {
+  async requireApprovedFor(
+    id: string,
+    input: { extensionId: string; capabilityId: string; input: Record<string, unknown>; idempotencyKey?: string; sessionId?: string }
+  ) {
+    const file = await this.readFile();
+    const request = findApproval(file, id);
+    if (expireRequest(request)) {
+      await this.writeFile(file);
+      return undefined;
+    }
+    if (request.status !== "approved") {
+      throw new BadRequestException(`Approval request ${id} is ${request.status}; request a new approval without reusing this id`);
+    }
+    if (
+      request.extensionId !== input.extensionId ||
+      request.capabilityId !== input.capabilityId ||
+      stableStringify(request.input) !== stableStringify(input.input) ||
+      request.idempotencyKey !== input.idempotencyKey ||
+      request.sessionId !== input.sessionId
+    ) {
       throw new BadRequestException(`Approval request ${id} does not match the requested extension action`);
     }
     return request;
   }
 
+  async consumeApproved(id: string) {
+    const file = await this.readFile();
+    const request = findApproval(file, id);
+    if (request.executionPolicy === "reusable") return request;
+    if (expireRequest(request)) {
+      await this.writeFile(file);
+      throw new BadRequestException(`Approval request ${id} has expired`);
+    }
+    if (request.status !== "approved") throw new BadRequestException(`Approval request ${id} is already ${request.status}`);
+    const now = new Date().toISOString();
+    request.status = "consumed";
+    request.consumedAt = now;
+    request.updatedAt = now;
+    await this.writeFile(file);
+    return request;
+  }
+
   private async readFile(): Promise<ApprovalsFile> {
     const file = await this.store.read<ApprovalsFile>("approvals.json", { requests: [] });
-    return { requests: file.requests ?? [] };
+    return { requests: (file.requests ?? []).map((request) => approvalRequestSchema.parse(request)) };
   }
 
   private async writeFile(file: ApprovalsFile) {
     await this.store.write("approvals.json", file);
   }
+}
+
+function approvalExpiry(now: string) {
+  const configured = Number(process.env.SP_AGENT_APPROVAL_TTL_MS ?? 10 * 60 * 1000);
+  const ttlMs = Number.isFinite(configured) && configured > 0 ? configured : 10 * 60 * 1000;
+  return new Date(Date.parse(now) + ttlMs).toISOString();
+}
+
+function expireRequests(requests: ApprovalRequest[]) {
+  let changed = false;
+  for (const request of requests) {
+    if (expireRequest(request)) changed = true;
+  }
+  return changed;
+}
+
+function expireRequest(request: ApprovalRequest) {
+  if ((request.status !== "pending" && request.status !== "approved") || !request.expiresAt) return false;
+  if (Date.parse(request.expiresAt) > Date.now()) return false;
+  const now = new Date().toISOString();
+  request.status = "expired";
+  request.updatedAt = now;
+  return true;
 }
 
 function findApproval(file: ApprovalsFile, id: string) {

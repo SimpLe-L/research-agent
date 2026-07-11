@@ -1,6 +1,11 @@
 import { Type } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 
+type AgentArtifact = { kind: "research_report"; workflowId: string; report: any };
+type ExtensionCapability = { id: string; label: string; description: string; inputSchema?: string };
+type ExtensionManifest = { id: string; status: string; capabilities: ExtensionCapability[] };
+type ResearchReport = { id: string; workflowId: string; answer: string; uncertainty: string[]; openQuestions: string[]; [key: string]: unknown };
+
 type PiSdkModule = typeof import("@earendil-works/pi-coding-agent");
 type PiModelRegistry = {
   registerProvider(provider: string, config: Record<string, unknown>): void;
@@ -65,6 +70,7 @@ export type PersonalAgentTurnResult = {
   degradedReason?: string;
   activeTools?: string[];
   toolCalls?: AgentRuntimeToolCallAudit[];
+  artifacts?: AgentArtifact[];
 };
 
 export type PersonalAgentTurnStreamEvent =
@@ -99,13 +105,16 @@ const localDeterministicRuntimeAdapter: RuntimeAdapter = {
     reachable: true
   }),
   runTurn: async (input) => {
+    const routed = await runDeterministicSkillRoute(input);
+    if (routed) return routed;
     return {
       content:
         `本地确定性 runtime 已接管本轮回复。收到用户消息：${truncateForReply(input.message)}\n` +
         "当前是离线降级模式，无法进行真实模型推理； typed chat、memory、skills 边界仍保持可用。",
       provider: "local-deterministic",
       model: "deterministic-v0",
-      activeTools: []
+      activeTools: createPiAgentShellTools(input).map((tool) => tool.name),
+      artifacts: []
     };
   },
   streamTurn: async function* (input) {
@@ -133,6 +142,72 @@ export function getSelectedRuntimeAdapter(env: NodeJS.ProcessEnv = process.env):
 function truncateForReply(value: string) {
   const clean = value.replace(/\s+/g, " ").trim();
   return clean.length > 80 ? `${clean.slice(0, 80)}...` : clean;
+}
+
+function isResearchIntent(message: string) {
+  return /调研|研究|比较|对比|查证|核实|证据|资料|research|compare|verify|evidence/i.test(message);
+}
+
+async function runDeterministicSkillRoute(input: PersonalAgentTurnInput): Promise<PersonalAgentTurnResult | undefined> {
+  if (!isResearchIntent(input.message) || !input.extensionInvoker || !hasCapability(input.extensionManifests, "personal.research", "research.run")) return undefined;
+  const response = await input.extensionInvoker({
+    extensionId: "personal.research",
+    capabilityId: "research.run",
+    input: {
+      question: input.message,
+      sessionId: input.sessionId,
+      sourceScopes: ["local_documents", "bookmarks"],
+      reportFormat: "brief",
+      strategy: "deterministic"
+    }
+  });
+  const artifact = researchArtifactFromResult("personal.research", "research.run", response.result);
+  if (!artifact) {
+    return {
+      content: response.degradedReason ? `无法完成本次调研：${response.degradedReason}` : "本次调研未生成可核验的报告。",
+      provider: "local-deterministic",
+      model: "deterministic-skill-router-v1",
+      degradedReason: response.degradedReason,
+      activeTools: [capabilityToolName("personal.research", "research.run")],
+      toolCalls: [{ toolName: capabilityToolName("personal.research", "research.run"), input: { question: input.message }, isError: !response.ok }],
+      artifacts: []
+    };
+  }
+  const { report } = artifact;
+  const webSearchTool = capabilityToolName("personal.research", "research.search_web");
+  if (report.metrics?.citedClaimCount === 0 && hasCapability(input.extensionManifests, "personal.research", "research.search_web")) {
+    const webSearch = await input.extensionInvoker({
+      extensionId: "personal.research",
+      capabilityId: "research.search_web",
+      input: { question: input.message, sessionId: input.sessionId, maxResults: 5 }
+    });
+    if (webSearch.status === "pending_approval") {
+      return {
+        content: `${report.answer}\n\n本地资料不足，已请求批准使用网页搜索补充可引用证据。批准后会生成新的调研报告。`,
+        provider: "local-deterministic",
+        model: "deterministic-skill-router-v1",
+        activeTools: [capabilityToolName("personal.research", "research.run"), webSearchTool],
+        toolCalls: [
+          { toolName: capabilityToolName("personal.research", "research.run"), input: { question: input.message }, isError: false },
+          { toolName: webSearchTool, input: { question: input.message }, isError: false, outputPreview: "Approval requested for remote web search." }
+        ],
+        artifacts: [artifact]
+      };
+    }
+  }
+  const uncertainty = report.uncertainty[0] ?? report.openQuestions[0];
+  return {
+    content: `${report.answer}${uncertainty ? `\n\n不确定项：${uncertainty}` : ""}`,
+    provider: "local-deterministic",
+    model: "deterministic-skill-router-v1",
+    activeTools: [capabilityToolName("personal.research", "research.run")],
+    toolCalls: [{ toolName: capabilityToolName("personal.research", "research.run"), input: { question: input.message }, isError: false }],
+    artifacts: [artifact]
+  };
+}
+
+function hasCapability(manifests: unknown[] | undefined, extensionId: string, capabilityId: string) {
+  return readOnlyCapabilities(manifests).some(({ manifest, capability }) => manifest.id === extensionId && capability.id === capabilityId);
 }
 
 function sanitizeVisibleAgentContent(content: string): string {
@@ -322,13 +397,15 @@ async function runPiPersonalAgentTurn(
   const modelLabel = `${provider}/${modelId}`;
 
   if (!piHasApiKey(provider, env)) {
+    const routed = await runDeterministicSkillRoute(input);
+    if (routed) return { ...routed, provider: "pi", model: modelLabel, degradedReason: `AGENT_RUNTIME_PROVIDER=pi requires SILICONFLOW_API_KEY for the configured Pi model provider (${provider}); deterministic skill routing was used.` };
     return {
       content:
         "本地个人 agent 基座已启动。当前缺少 Pi 模型密钥，所以这次使用确定性降级回复；你仍然可以继续搭建 memory、speech 和 skills 边界。",
       provider: "pi",
       model: modelLabel,
       degradedReason: `AGENT_RUNTIME_PROVIDER=pi requires SILICONFLOW_API_KEY for the configured Pi model provider (${provider}).`,
-      activeTools: ["inspect_extension_registry", "invoke_extension_capability"],
+      activeTools: createPiAgentShellTools(input).map((tool) => tool.name),
       toolCalls: []
     };
   }
@@ -346,9 +423,10 @@ async function runPiPersonalAgentTurn(
 
     const chunks: string[] = [];
     const toolCalls: AgentRuntimeToolCallAudit[] = [];
+    const artifacts: AgentArtifact[] = [];
     let finalAssistantText = "";
     let finalMessages: unknown;
-    const customTools = createPiAgentShellTools(input);
+    const customTools = createPiAgentShellTools(input, artifacts);
     const appToolNames = customTools.map((tool) => tool.name);
     const { session, modelFallbackMessage } = await pi.createAgentSession({
       cwd: env.PI_WORKING_DIR || process.cwd(),
@@ -397,7 +475,8 @@ async function runPiPersonalAgentTurn(
         model: modelLabel,
         degradedReason: modelFallbackMessage ? `Pi SDK returned no assistant text. ${modelFallbackMessage}` : "Pi SDK returned no assistant text.",
         activeTools,
-        toolCalls
+        toolCalls,
+        artifacts
       };
     }
 
@@ -407,7 +486,8 @@ async function runPiPersonalAgentTurn(
       model: modelLabel,
       degradedReason: modelFallbackMessage,
       activeTools,
-      toolCalls
+      toolCalls,
+      artifacts
     };
   } catch (error) {
     return {
@@ -415,7 +495,7 @@ async function runPiPersonalAgentTurn(
       provider: "pi",
       model: modelLabel,
       degradedReason: error instanceof Error ? error.message : "Pi SDK personal agent turn failed.",
-      activeTools: ["inspect_extension_registry", "invoke_extension_capability"],
+      activeTools: createPiAgentShellTools(input).map((tool) => tool.name),
       toolCalls: []
     };
   }
@@ -430,12 +510,19 @@ async function* streamPiPersonalAgentTurn(
   const modelLabel = `${provider}/${modelId}`;
 
   if (!piHasApiKey(provider, env)) {
+    const routed = await runDeterministicSkillRoute(input);
+    if (routed) {
+      const result = { ...routed, provider: "pi", model: modelLabel, degradedReason: `AGENT_RUNTIME_PROVIDER=pi requires SILICONFLOW_API_KEY for the configured Pi model provider (${provider}); deterministic skill routing was used.` };
+      for (const text of chunkText(result.content)) yield { type: "text_delta", text };
+      yield { type: "done", result };
+      return;
+    }
     const result: PersonalAgentTurnResult = {
       content: "本地个人 agent 基座已启动。当前缺少 Pi 模型密钥，所以这次使用确定性降级回复；你仍然可以继续搭建 memory、speech 和 skills 边界。",
       provider: "pi",
       model: modelLabel,
       degradedReason: `AGENT_RUNTIME_PROVIDER=pi requires SILICONFLOW_API_KEY for the configured Pi model provider (${provider}).`,
-      activeTools: ["inspect_extension_registry", "invoke_extension_capability"],
+      activeTools: createPiAgentShellTools(input).map((tool) => tool.name),
       toolCalls: []
     };
     for (const text of chunkText(result.content)) yield { type: "text_delta", text };
@@ -463,9 +550,10 @@ async function* streamPiPersonalAgentTurn(
 
       const chunks: string[] = [];
       const toolCalls: AgentRuntimeToolCallAudit[] = [];
+      const artifacts: AgentArtifact[] = [];
       let finalAssistantText = "";
       let finalMessages: unknown;
-      const customTools = createPiAgentShellTools(input);
+      const customTools = createPiAgentShellTools(input, artifacts);
       const appToolNames = customTools.map((tool) => tool.name);
       const created = await pi.createAgentSession({
         cwd: env.PI_WORKING_DIR || process.cwd(),
@@ -516,7 +604,8 @@ async function* streamPiPersonalAgentTurn(
             model: modelLabel,
             degradedReason: modelFallbackMessage,
             activeTools,
-            toolCalls
+            toolCalls,
+            artifacts
           }
         : {
             content: "Pi runtime 已返回空输出。本地 agent shell 保持降级可用。",
@@ -524,7 +613,8 @@ async function* streamPiPersonalAgentTurn(
             model: modelLabel,
             degradedReason: modelFallbackMessage ? `Pi SDK returned no assistant text. ${modelFallbackMessage}` : "Pi SDK returned no assistant text.",
             activeTools,
-            toolCalls
+            toolCalls,
+            artifacts
           };
       if (!content) queue.push({ type: "text_delta", text: result.content });
       queue.push({ type: "done", result });
@@ -534,7 +624,7 @@ async function* streamPiPersonalAgentTurn(
         provider: "pi",
         model: modelLabel,
         degradedReason: error instanceof Error ? error.message : "Pi SDK personal agent stream failed.",
-        activeTools: ["inspect_extension_registry", "invoke_extension_capability"],
+        activeTools: createPiAgentShellTools(input).map((tool) => tool.name),
         toolCalls: []
       };
       for (const text of chunkText(result.content)) queue.push({ type: "text_delta", text });
@@ -564,7 +654,7 @@ async function loadPiSdk(): Promise<PiSdkModule> {
   return (await import("@earendil-works/pi-coding-agent")) as PiSdkModule;
 }
 
-function createPiAgentShellTools(input: PersonalAgentTurnInput): ToolDefinition[] {
+function createPiAgentShellTools(input: PersonalAgentTurnInput, artifacts: AgentArtifact[] = []): ToolDefinition[] {
   return [
     {
       name: "inspect_extension_registry",
@@ -587,68 +677,83 @@ function createPiAgentShellTools(input: PersonalAgentTurnInput): ToolDefinition[
         };
       }
     },
-    {
-      name: "invoke_extension_capability",
-      label: "Invoke extension capability",
-      description: "Invoke one registered local extension capability through the app permission boundary.",
-      promptSnippet: "Invoke a registered local extension capability through the permissioned app boundary",
-      promptGuidelines: [
-        "Use this only for read-only/search capabilities unless the API explicitly allows more.",
-        "Never request wallet, posting, shell, file-write, browser-control, or credential actions.",
-        "Always report permissionAudit if invocation is denied or degraded."
-      ],
-      parameters: invokeExtensionCapabilityParams,
-      async execute(_toolCallId, params) {
-        const toolParams = params as { extensionId?: string; capabilityId?: string; inputJson?: string };
-        if (!input.extensionInvoker) {
-          return {
-            content: [{ type: "text", text: truncateJson({ ok: false, status: "denied", degradedReason: "The API shell did not provide an extension invoker." }, 4000) }],
-            details: { ok: false, status: "denied" }
-          };
-        }
-        if (!toolParams.extensionId || !toolParams.capabilityId) {
-          return {
-            content: [{ type: "text", text: truncateJson({ ok: false, status: "denied", degradedReason: "extensionId and capabilityId are required." }, 4000) }],
-            details: { ok: false, status: "denied" }
-          };
-        }
-        const extensionInput = parseOptionalJsonObject(toolParams.inputJson);
-        if (!extensionInput.ok) {
-          return {
-            content: [{ type: "text", text: truncateJson(extensionInput, 4000) }],
-            details: { ok: false, status: "denied" }
-          };
-        }
-        const result = await input.extensionInvoker({
-          extensionId: toolParams.extensionId,
-          capabilityId: toolParams.capabilityId,
-          input: extensionInput.value
-        });
-        return {
-          content: [{ type: "text", text: truncateJson(redactLargeExtensionResult(result), 12000) }],
-          details: {
-            ok: result.ok,
-            status: result.status,
-            extensionId: toolParams.extensionId,
-            capabilityId: toolParams.capabilityId
-          }
-        };
-      }
-    }
+    ...createCapabilityTools(input, artifacts)
   ];
 }
 
+function createCapabilityTools(input: PersonalAgentTurnInput, artifacts: AgentArtifact[]): ToolDefinition[] {
+  return readOnlyCapabilities(input.extensionManifests).map(({ manifest, capability }) => ({
+    name: capabilityToolName(manifest.id, capability.id),
+    label: capability.label,
+    description: capability.description,
+    promptSnippet: `${capability.label}: ${capability.description}`,
+    promptGuidelines: [
+      "Use this capability only when it materially grounds or completes the user's request.",
+      "Supply a JSON object in inputJson that follows the documented input schema.",
+      "Do not claim results that are absent from the capability response."
+    ],
+    parameters: invokeExtensionCapabilityParams,
+    async execute(_toolCallId, params) {
+      const extensionInput = parseOptionalJsonObject((params as { inputJson?: string }).inputJson);
+      if (!extensionInput.ok) return toolFailure(extensionInput);
+      if (!input.extensionInvoker) {
+        return toolFailure({ ok: false, status: "denied", degradedReason: "The API shell did not provide an extension invoker." });
+      }
+      const result = await input.extensionInvoker({ extensionId: manifest.id, capabilityId: capability.id, input: extensionInput.value });
+      const artifact = researchArtifactFromResult(manifest.id, capability.id, result.result);
+      if (artifact) artifacts.push(artifact);
+      return {
+        content: [{ type: "text", text: truncateJson(redactLargeExtensionResult(result), 12000) }],
+        details: { ok: result.ok, status: result.status, extensionId: manifest.id, capabilityId: capability.id }
+      };
+    }
+  }));
+}
+
+function toolFailure(value: { ok: false; status: string; degradedReason: string }) {
+  return {
+    content: [{ type: "text" as const, text: truncateJson(value, 4000) }],
+    details: { ok: false, status: value.status }
+  };
+}
+
+function readOnlyCapabilities(manifests: unknown[] | undefined): Array<{ manifest: ExtensionManifest; capability: ExtensionCapability }> {
+  return (manifests ?? []).flatMap((candidate) => {
+    const manifest = candidate as ExtensionManifest;
+    if (manifest.status !== "active" || !manifest.id || !Array.isArray(manifest.capabilities)) return [];
+    return manifest.capabilities.map((capability) => ({ manifest, capability }));
+  });
+}
+
+function capabilityToolName(extensionId: string, capabilityId: string) {
+  return `${extensionId}_${capabilityId}`.replace(/[^a-zA-Z0-9_]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 64);
+}
+
+function researchArtifactFromResult(extensionId: string, capabilityId: string, result: unknown): AgentArtifact | undefined {
+  if (extensionId !== "personal.research" || capabilityId !== "research.run") return undefined;
+  const record = result as { workflow?: { id?: string; result?: unknown } } | undefined;
+  const report = record?.workflow?.result as ResearchReport | undefined;
+  if (!record?.workflow?.id || !report?.id || report.workflowId !== record.workflow.id) return undefined;
+  return { kind: "research_report", workflowId: record.workflow.id, report };
+}
+
 function buildPiAgentShellPrompt(input: PersonalAgentTurnInput): string {
+  const capabilities = readOnlyCapabilities(input.extensionManifests).map(({ manifest, capability }) => ({
+    toolName: capabilityToolName(manifest.id, capability.id),
+    extensionId: manifest.id,
+    capabilityId: capability.id,
+    label: capability.label,
+    description: capability.description,
+    inputSchema: capability.inputSchema ?? "{}"
+  }));
   return JSON.stringify({
     instruction:
-      "You are the Pi runtime for a local-first single-user personal Agent OS. Reply in concise Chinese. Use provided memoryContext silently as background context. Do not mention that you searched memory, inspected extensions, called tools, or checked bookmarks unless the user explicitly asks how you know or asks for debug details. Do not expose tool-call counts, internal planning, retrieval steps, or capability names in the final answer. You may inspect the extension registry, but you must not claim to execute skills unless a tool result proves it. If memory or tools provide no relevant evidence, answer normally from general knowledge and say uncertainty only when needed. Do not request private keys. Do not suggest wallet transactions, swaps, transfers, posting automation, shell tools, file-write tools, or unrestricted browser control. Speech is an app-owned layer; describe only proven availability. Keep the response under 10 lines.",
+      "You are the Pi runtime for a local-first single-user personal Agent OS. Reply in concise Chinese. Use provided memoryContext silently as background context. Decide independently whether an available capability is needed; do not ask the user to select a skill. For research, comparison, verification, evidence, or source-grounded questions, call personal_research_research_run first with { question: userMessage, sourceScopes: [local_documents, bookmarks], reportFormat: brief, strategy: deterministic }. Use returned evidence only, and state uncertainty where the report does. If its report has no cited claims, call personal_research_research_search_web with { question: userMessage, sessionId, maxResults: 5 } to propose a scoped web search. This proposal creates an approval request and does not access the network until the user approves it. Do not claim remote evidence before a completed report exists. Do not mention tools, internal steps, or tool-call counts unless asked for debug details. Never request private keys or suggest wallet transactions, swaps, transfers, posting automation, shell, file-write, browser-control, or unrestricted provider actions. Keep the response under 10 lines.",
     userMessage: input.message,
     sessionId: input.sessionId,
     memoryContext: input.memoryContext ?? [],
-    availableAppTools: [
-      "inspect_extension_registry: read local extensions and safety policy only",
-      "invoke_extension_capability: invoke allowed extension capabilities through the API permission boundary"
-    ],
+    availableAppTools: ["inspect_extension_registry: read local extensions and safety policy only", ...capabilities.map((item) => `${item.toolName}: ${item.label}`)],
+    availableCapabilities: capabilities,
     extensionInvocationPolicy:
       "Only API-allowed capability invocations may run. Shell/file/browser/wallet/posting actions are unavailable in this v0.x path.",
     extensionCount: input.extensionManifests?.length ?? 0

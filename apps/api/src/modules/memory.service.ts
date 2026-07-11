@@ -598,7 +598,8 @@ function tokenize(value: string) {
     .toLowerCase()
     .split(/[^a-z0-9\u4e00-\u9fa5]+/u)
     .map((term) => term.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter((term) => !MEMORY_STOP_WORDS.has(term));
   const expanded = new Set<string>();
   for (const term of terms.length > 0 ? terms : [value.toLowerCase()]) {
     expanded.add(term);
@@ -610,6 +611,10 @@ function tokenize(value: string) {
   }
   return Array.from(expanded);
 }
+
+const MEMORY_STOP_WORDS = new Set([
+  "a", "an", "and", "are", "as", "at", "be", "by", "does", "for", "from", "how", "in", "is", "it", "of", "on", "or", "that", "the", "this", "to", "was", "what", "when", "where", "which", "who", "with"
+]);
 
 function detectConflicts(candidate: MemoryEntry, memories: MemoryEntry[]) {
   const candidateTerms = new Set(tokenize(candidate.content));
