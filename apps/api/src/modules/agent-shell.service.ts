@@ -7,20 +7,22 @@ import {
 } from "@sp-agent/agent-runtime";
 import type { PersonalAgentExtensionInvokeRequest, PersonalAgentTurnInput, PersonalAgentTurnResult } from "@sp-agent/agent-runtime";
 import type { AgentMessageResponse, AgentShellStatus, CreateAgentMessageInput, ExtensionManifest, MemorySearchResult } from "@sp-agent/shared";
+import type { LocalSkillRecord } from "@sp-agent/shared";
 import { ChatService } from "./chat.service.js";
-import { ExtensionsService, isReadOnlyExtensionCapability } from "./extensions.service.js";
-import { MemoryService } from "./memory.service.js";
+import { ExtensionsService } from "./extensions.service.js";
+import { LocalSkillsService } from "./local-skills.service.js";
 
 @Injectable()
 export class AgentShellService {
   constructor(
     @Inject(ExtensionsService) private readonly extensionsService: ExtensionsService,
-    @Inject(MemoryService) private readonly memoryService: MemoryService,
+    @Inject(LocalSkillsService) private readonly localSkillsService: LocalSkillsService,
     @Inject(ChatService) private readonly chatService: ChatService
   ) {}
 
   async getStatus(): Promise<AgentShellStatus> {
     const extensionStatus = await this.extensionsService.list();
+    const localSkills = await this.localSkillsService.activeManifests();
     return {
       mode: "local_personal_agent",
       piRuntime: {
@@ -33,7 +35,7 @@ export class AgentShellService {
         default: adapter.default
       })),
       safetyModel: extensionStatus.safetyModel,
-      extensions: extensionStatus.extensions
+      extensions: [...extensionStatus.extensions, ...localSkills.map(toLocalSkillManifest)]
     };
   }
 
@@ -90,51 +92,73 @@ export class AgentShellService {
 
   private async prepareTurn(input: CreateAgentMessageInput, metadata: Record<string, unknown>) {
     const extensionStatus = await this.extensionsService.list();
+    const localSkills = await this.localSkillsService.activeManifests();
     const session = await this.chatService.getOrCreateSession(input.sessionId, { title: makeSessionTitle(input.content) });
     await this.chatService.createMessage(session.id, {
       role: "user",
       content: input.content,
       metadata
     });
-    const memoryContext = await this.memoryService
-      .retrieveForAgent({
-        query: input.content,
-        sessionId: session.id,
-        limit: 5
-      })
-      .then((result) => result.memories);
+    // Phase one deliberately keeps durable memory outside the runtime context.
+    const memoryContext: MemorySearchResult[] = [];
     const allowedExtensions =
       input.extensionIds.length > 0
         ? extensionStatus.extensions.filter((extension) => input.extensionIds.includes(extension.id))
-        : extensionStatus.extensions;
+        : [...extensionStatus.extensions, ...localSkills.map(toLocalSkillManifest)];
     const agentVisibleExtensions = allowedExtensions
       .map((extension) => ({
         ...extension,
         capabilities: extension.capabilities.filter((capability) =>
-          isReadOnlyExtensionCapability(this.extensionsService.getInvocationAudit(extension.id, capability.id)) ||
-          isApprovalProposalCapability(extension.id, capability.id)
+          extension.id.startsWith("local.skill.") || this.extensionsService.getInvocationAudit(extension.id, capability.id).allowed
         )
       }))
       .filter((extension) => extension.capabilities.length > 0) as ExtensionManifest[];
+    let loadedLocalSkillId: string | undefined;
     const turnInput: PersonalAgentTurnInput = {
       message: input.content,
       sessionId: session.id,
       memoryContext,
       extensionManifests: agentVisibleExtensions,
       safetyModel: extensionStatus.safetyModel,
-      extensionInvoker: (request) => this.invokeAgentExtension(request)
+      extensionInvoker: async (request) => {
+        if (request.extensionId.startsWith("local.skill.")) loadedLocalSkillId = request.extensionId.slice("local.skill.".length);
+        if (loadedLocalSkillId && !request.extensionId.startsWith("local.skill.")) {
+          const skill = await this.localSkillsService.get(loadedLocalSkillId);
+          const requestedTool = `${request.extensionId}.${request.capabilityId}`;
+          if (!skill.requestedTools.includes(requestedTool)) {
+            return { ok: false, status: "denied", degradedReason: `Local Skill ${loadedLocalSkillId} did not declare ${requestedTool}.` };
+          }
+        }
+        return this.invokeAgentExtension(request);
+      }
     };
     return { sessionId: session.id, memoryContext, turnInput };
   }
 
   private async invokeAgentExtension(request: PersonalAgentExtensionInvokeRequest) {
+    if (request.extensionId.startsWith("local.skill.")) {
+      try {
+        const skillId = request.extensionId.slice("local.skill.".length);
+        if (request.capabilityId === "skill.load_instructions") {
+          return { ok: true, status: "completed", result: await this.localSkillsService.loadInstructions(skillId) };
+        }
+        if (request.capabilityId === "skill.read_reference") {
+          const path = request.input.path;
+          if (typeof path !== "string" || !path.trim()) return { ok: false, status: "denied", degradedReason: "Reference path is required." };
+          return { ok: true, status: "completed", result: await this.localSkillsService.loadReference(skillId, path) };
+        }
+        return { ok: false, status: "denied", degradedReason: `Local Skill capability ${request.capabilityId} is not available.` };
+      } catch (error) {
+        return { ok: false, status: "failed", degradedReason: error instanceof Error ? error.message : "Local Skill could not be loaded." };
+      }
+    }
     const audit = this.extensionsService.getInvocationAudit(request.extensionId, request.capabilityId);
-    if (!isReadOnlyExtensionCapability(audit) && !isApprovalProposalCapability(request.extensionId, request.capabilityId)) {
+    if (!audit.allowed) {
       return {
         ok: false,
         status: "denied",
         permissionAudit: audit,
-        degradedReason: "This agent turn may only execute read-only capabilities or propose an approval-gated web search."
+        degradedReason: "This agent turn requested an unavailable capability."
       };
     }
     try {
@@ -178,10 +202,6 @@ export class AgentShellService {
   }
 }
 
-function isApprovalProposalCapability(extensionId: string, capabilityId: string) {
-  return extensionId === "personal.research" && (capabilityId === "research.search_web" || capabilityId === "research.run_provider_assisted");
-}
-
 function makeSessionTitle(content: string) {
   const clean = content.replace(/\s+/g, " ").trim();
   if (!clean) return "New Chat";
@@ -197,5 +217,34 @@ function toMemoryContextDebug(memory: MemorySearchResult) {
     rankingSignals: memory.rankingSignals,
     citation: memory.citation,
     debug: memory.debug
+  };
+}
+
+function toLocalSkillManifest(skill: LocalSkillRecord): ExtensionManifest {
+  return {
+    id: `local.skill.${skill.id}`,
+    name: skill.name,
+    description: skill.description,
+    kind: "skill",
+    phase: "local-import",
+    status: skill.status,
+    capabilities: [
+      {
+        id: "skill.load_instructions",
+        label: "Load Skill instructions",
+        description: "Load this local Skill's instructions and declared API tools for the current turn.",
+        permissions: ["skills:read"],
+        inputSchema: "{}",
+        outputSchema: "{ instructions: string, requestedTools: string[] }"
+      },
+      {
+        id: "skill.read_reference",
+        label: "Read Skill reference",
+        description: "Read one file from this installed Skill package by its relative path.",
+        permissions: ["skills:read"],
+        inputSchema: "{ path: string }",
+        outputSchema: "{ path: string, content: string }"
+      }
+    ]
   };
 }

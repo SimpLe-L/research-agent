@@ -431,17 +431,28 @@ export const researchMetricsSchema = z.object({
 });
 export type ResearchMetrics = z.infer<typeof researchMetricsSchema>;
 
+export const researchConnectorStatusSchema = z.object({
+  id: z.string(),
+  required: z.boolean(),
+  status: z.enum(["ready", "missing", "degraded"]),
+  sourceCount: z.number().int().nonnegative().default(0),
+  retrievedAt: z.string().optional(),
+  degradedReason: z.string().optional()
+});
+export type ResearchConnectorStatus = z.infer<typeof researchConnectorStatusSchema>;
+
 export const researchReportSchema = z.object({
   id: z.string(),
   workflowId: z.string(),
   request: researchRequestSchema,
   plan: z.object({
+    responseMode: z.literal("evidence_research"),
+    skillId: z.enum(["general.local_first", "crypto.investment"]),
     decisionType: z.string(),
     objective: z.string(),
     researchQuestions: z.array(z.string()),
     requiredDimensions: z.array(z.string()),
-    connectorIds: z.array(z.enum(["local_documents", "local_bookmarks", "user_provided_sources", "tavily_web_search"])),
-    sourceScopes: z.array(researchSourceScopeSchema),
+    sourceStrategy: z.enum(["local_only", "local_then_remote"]),
     maxSources: z.number(),
     maxWebResults: z.number(),
     freshness: z.string(),
@@ -451,6 +462,7 @@ export const researchReportSchema = z.object({
   claims: z.array(researchClaimSchema).default([]),
   sources: z.array(researchSourceSchema).default([]),
   evidence: z.array(researchEvidenceSchema).default([]),
+  connectorStatuses: z.array(researchConnectorStatusSchema).default([]),
   uncertainty: z.array(z.string()).default([]),
   openQuestions: z.array(z.string()).default([]),
   provider: z.enum(["deterministic", "provider_assisted"]),
@@ -496,12 +508,13 @@ export const researchWebSearchSchema = z.object({
 export type ResearchWebSearchInput = z.infer<typeof researchWebSearchSchema>;
 
 export const researchPlanSchema = z.object({
+  responseMode: z.literal("evidence_research"),
+  skillId: z.enum(["general.local_first", "crypto.investment"]),
   decisionType: z.string().min(1).max(80),
   objective: z.string().min(3).max(1_000),
   researchQuestions: z.array(z.string().min(3).max(500)).min(1).max(8),
   requiredDimensions: z.array(z.string().min(2).max(120)).min(1).max(12),
-  connectorIds: z.array(z.enum(["local_documents", "local_bookmarks", "user_provided_sources", "tavily_web_search"])).min(1).max(4),
-  sourceScopes: z.array(researchSourceScopeSchema).min(1).max(4),
+  sourceStrategy: z.enum(["local_only", "local_then_remote"]),
   maxSources: z.coerce.number().int().positive().max(20).default(10),
   maxWebResults: z.coerce.number().int().positive().max(8).default(5),
   freshness: z.string().min(1).max(160),
@@ -652,6 +665,36 @@ export const invokeExtensionSchema = z.object({
 });
 export type InvokeExtensionInput = z.infer<typeof invokeExtensionSchema>;
 
+export const localSkillManifestSchema = z.object({
+  id: z.string().regex(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/).max(120),
+  version: z.string().min(1).max(80),
+  name: z.string().min(1).max(120),
+  description: z.string().min(1).max(1_000),
+  inputSchema: z.record(z.unknown()).default({}),
+  requestedTools: z.array(z.string().min(1).max(180)).max(20).default([]),
+  outputArtifact: z.string().min(1).max(120).optional()
+});
+export type LocalSkillManifest = z.infer<typeof localSkillManifestSchema>;
+
+export const importLocalSkillSchema = z.object({ sourcePath: z.string().min(1).max(4_000) });
+export type ImportLocalSkillInput = z.infer<typeof importLocalSkillSchema>;
+
+export const importRepositorySkillSchema = z.object({
+  repositoryUrl: z.string().url().max(2_000),
+  ref: z.string().trim().min(1).max(160).default("main"),
+  skillPath: z.string().trim().max(1_000).default("")
+});
+export type ImportRepositorySkillInput = z.infer<typeof importRepositorySkillSchema>;
+
+export const localSkillRecordSchema = localSkillManifestSchema.extend({
+  status: z.enum(["active", "disabled"]),
+  sourcePath: z.string(),
+  contentHash: z.string(),
+  installedAt: z.string(),
+  enabledAt: z.string().optional()
+});
+export type LocalSkillRecord = z.infer<typeof localSkillRecordSchema>;
+
 export const agentShellStatusSchema = z.object({
   mode: z.literal("local_personal_agent"),
   piRuntime: providerStatusSchema.extend({
@@ -668,7 +711,7 @@ export const agentShellStatusSchema = z.object({
     })
   ).default([]),
   safetyModel: z.object({
-    defaultToolPolicy: z.literal("read_only"),
+    defaultToolPolicy: z.enum(["read_only", "trusted_local"]),
     disabledToolClasses: z.array(z.string()).default([]),
     highRiskActions: z.array(z.string()).default([])
   }),
@@ -683,13 +726,10 @@ export const createAgentMessageSchema = z.object({
 });
 export type CreateAgentMessageInput = z.infer<typeof createAgentMessageSchema>;
 
-export const agentArtifactSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("research_report"),
-    workflowId: z.string(),
-    report: researchReportSchema
-  })
-]);
+export const agentArtifactSchema = z.object({
+  kind: z.string(),
+  payload: z.unknown().optional()
+}).passthrough();
 export type AgentArtifact = z.infer<typeof agentArtifactSchema>;
 
 export const agentMessageResponseSchema = z.object({

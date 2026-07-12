@@ -37,7 +37,7 @@ export type ExtensionManifest = {
 
 export type ExtensionRuntimeCatalog = {
   safetyModel: {
-    defaultToolPolicy: "read_only";
+    defaultToolPolicy: "read_only" | "trusted_local";
     disabledToolClasses: string[];
     highRiskActions: string[];
   };

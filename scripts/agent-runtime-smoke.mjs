@@ -52,44 +52,6 @@ async function main() {
   assert(!localTurn.content.includes("可见扩展"), "local deterministic turn should not expose extension counts");
   assert(!localTurn.content.includes("检索到相关记忆"), "local deterministic turn should not expose memory retrieval counts");
 
-  const researchReport = {
-    id: "report_smoke",
-    workflowId: "workflow_smoke",
-    answer: "本地资料支持该结论。",
-    claims: [],
-    sources: [],
-    evidence: [],
-    uncertainty: ["来源范围仅限本地资料。"],
-    openQuestions: [],
-    provider: "deterministic",
-    metrics: { citedClaimCount: 0 },
-    createdAt: new Date().toISOString(),
-    completedAt: new Date().toISOString()
-  };
-  const routedTurn = await runPersonalAgentTurnWithAgent(
-    {
-      message: "帮我调研本地项目架构，并给出证据。",
-      sessionId: "runtime_smoke",
-      extensionManifests: [{
-        id: "personal.research",
-        status: "active",
-        capabilities: [
-          { id: "research.run", label: "Run research", description: "Research", inputSchema: "researchRequestSchema" },
-          { id: "research.search_web", label: "Search web", description: "Propose an approved web search", inputSchema: "researchWebSearchSchema" }
-        ]
-      }],
-      extensionInvoker: async (request) => {
-        if (request.capabilityId === "research.search_web") return { ok: true, status: "pending_approval" };
-        return { ok: true, status: "completed", result: { workflow: { id: "workflow_smoke", result: researchReport } } };
-      }
-    },
-    { AGENT_RUNTIME_PROVIDER: "local-deterministic" }
-  );
-  assert(routedTurn.toolCalls?.[0]?.toolName === "personal_research_research_run", "research intent should invoke the dedicated research tool");
-  assert(routedTurn.toolCalls?.[1]?.toolName === "personal_research_research_search_web", "insufficient local research should propose a scoped web search");
-  assert(routedTurn.content.includes("已请求批准使用网页搜索"), "research fallback should direct the user to approve the scoped web search");
-  assert(routedTurn.artifacts?.[0]?.workflowId === "workflow_smoke", "research intent should return a persisted artifact payload");
-
   console.log(
     JSON.stringify(
       {

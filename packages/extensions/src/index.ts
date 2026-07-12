@@ -1,11 +1,4 @@
 import {
-  researchFetchWebSourceSchema,
-  researchGetReportSchema,
-  researchImportSourceSchema,
-  researchBriefingSchema,
-  researchRequestSchema,
-  researchProviderRunSchema,
-  researchWebSearchSchema,
   type ExtensionCapability,
   type ExtensionManifest
 } from "@sp-agent/shared";
@@ -13,7 +6,7 @@ import {
 export type ExtensionRuntimeStatus = {
   mode: "local_personal_agent";
   safetyModel: {
-    defaultToolPolicy: "read_only";
+    defaultToolPolicy: "read_only" | "trusted_local";
     disabledToolClasses: string[];
     highRiskActions: string[];
   };
@@ -166,59 +159,19 @@ const localProjectSkill: ExtensionManifest = {
 const personalResearchSkill: ExtensionManifest = {
   id: "personal.research",
   name: "Research and Decision Agent",
-  description: "Create evidence-backed, cited research reports from explicitly permitted local sources. Conclusions remain inspectable and are never silently promoted to durable memory.",
+  description: "Structure explicitly supplied material and state uncertainty when the supplied context is insufficient.",
   kind: "skill",
   phase: "phase-5",
   status: "active",
   entrypoint: "/api/extensions/personal.research/invoke",
   capabilities: [
     {
-      id: "research.run",
-      label: "Run local-first research",
-      description: "Collect allowed local sources, retrieve relevant approved memory, compare evidence, and return a cited workflow-backed report.",
-      permissions: ["research:read", "sources:local_read", "memory:read", "workflow:run"],
-      inputSchema: "researchRequestSchema",
-      outputSchema: "{ workflow: workflowRun }"
-    },
-    {
-      id: "research.get_report",
-      label: "Inspect research report",
-      description: "Read a completed research workflow and its report, evidence, claims, citations, uncertainty, and metrics.",
-      permissions: ["research:read", "workflow:read"],
-      inputSchema: "researchGetReportSchema",
-      outputSchema: "{ workflow: workflowRun, report: researchReport }"
-    },
-    {
-      id: "research.import_source",
-      label: "Import a user-provided source",
-      description: "Store explicitly provided text and provenance in the local research source store after approval.",
-      permissions: ["research:source_write", "storage:write"],
-      inputSchema: "researchImportSourceSchema",
-      outputSchema: "researchSource"
-    },
-    {
-      id: "research.fetch_web_source",
-      label: "Fetch an allowlisted web source",
-      description: "Fetch one explicit URL only when its host is allowlisted and the request has approval; retain fetched provenance locally.",
-      permissions: ["research:remote_fetch", "connector:provider"],
-      inputSchema: "researchFetchWebSourceSchema",
-      outputSchema: "researchSource"
-    },
-    {
-      id: "research.search_web",
-      label: "Search the web for research evidence",
-      description: "Search the configured Tavily connector after approval, then create a cited report from the returned source snippets.",
-      permissions: ["research:remote_search", "connector:provider", "workflow:run"],
-      inputSchema: "researchWebSearchSchema",
-      outputSchema: "{ workflow: workflowRun }"
-    },
-    {
-      id: "research.run_provider_assisted",
-      label: "Run provider-assisted research",
-      description: "After approval, use the configured model to plan registered evidence sources, collect them, and synthesize a cited report.",
-      permissions: ["research:provider_plan", "research:provider_synthesis", "connector:provider", "workflow:run"],
-      inputSchema: "researchProviderRunSchema",
-      outputSchema: "{ workflow: workflowRun }"
+      id: "research.summarize_supplied_text",
+      label: "Structure supplied research material",
+      description: "Summarize user-supplied material, separate claims from uncertainty, and do not retrieve data.",
+      permissions: ["research:read"],
+      inputSchema: "{ content: string }",
+      outputSchema: "{ summary: string, uncertainty: string[] }"
     }
   ]
 };
@@ -298,25 +251,18 @@ const speechSkill: ExtensionManifest = {
   degradedReason: "Speech provider adapters are planned but not implemented yet."
 };
 
-const manifests: ExtensionManifest[] = [coreAgentShell, memorySkill, localContextSkill, localProjectSkill, personalResearchSkill, personalBriefingSkill, localBookmarksConnector, speechSkill];
+const manifests: ExtensionManifest[] = [coreAgentShell, memorySkill, localContextSkill, localProjectSkill, personalResearchSkill, localBookmarksConnector, speechSkill];
 
 const executableCapabilityContracts = {
-  "personal.research.research.run": { input: researchRequestSchema },
-  "personal.research.research.get_report": { input: researchGetReportSchema },
-  "personal.research.research.import_source": { input: researchImportSourceSchema },
-  "personal.research.research.fetch_web_source": { input: researchFetchWebSourceSchema },
-  "personal.research.research.search_web": { input: researchWebSearchSchema },
-  "personal.research.research.run_provider_assisted": { input: researchProviderRunSchema },
-  "personal.briefing.briefing.recent_research": { input: researchBriefingSchema }
 };
 
 export function getExtensionRuntimeStatus(): ExtensionRuntimeStatus {
   return {
     mode: "local_personal_agent",
     safetyModel: {
-      defaultToolPolicy: "read_only",
-      disabledToolClasses: ["shell", "filesystem_write", "browser_control", "wallet", "posting", "code_edit"],
-      highRiskActions: ["payments", "transactions", "external_posting", "destructive_file_write", "credential_access"]
+      defaultToolPolicy: "trusted_local",
+      disabledToolClasses: ["private_key", "wallet_transaction", "external_account_mutation"],
+      highRiskActions: ["payments", "external_posting", "destructive_operation", "credential_access"]
     },
     extensions: manifests
   };
@@ -335,7 +281,7 @@ export function findCapability(capabilities: ExtensionCapability[], capabilityId
 }
 
 export function parseExtensionCapabilityInput(extensionId: string, capabilityId: string, input: Record<string, unknown>) {
-  const key = `${extensionId}.${capabilityId}` as keyof typeof executableCapabilityContracts;
-  const contract = executableCapabilityContracts[key];
+  const key = `${extensionId}.${capabilityId}`;
+  const contract = (executableCapabilityContracts as Record<string, { input: { parse(value: unknown): unknown } }>)[key];
   return contract ? contract.input.parse(input) : input;
 }

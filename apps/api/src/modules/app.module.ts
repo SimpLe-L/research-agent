@@ -9,17 +9,14 @@ import { ExtensionsController } from "./extensions.controller.js";
 import { ExtensionsService } from "./extensions.service.js";
 import { HealthController } from "./health.controller.js";
 import { LocalJsonStore } from "./local-json-store.service.js";
+import { LocalSkillsController } from "./local-skills.controller.js";
+import { LocalSkillsService } from "./local-skills.service.js";
 import { MemoryController } from "./memory.controller.js";
 import { MemoryEmbeddingService } from "./memory-embedding.service.js";
 import { MemoryIntelligenceService } from "./memory-intelligence.service.js";
 import { MemoryService } from "./memory.service.js";
 import { MemoryVectorService } from "./memory-vector.service.js";
 import { ProvidersController } from "./providers.controller.js";
-import { ResearchService } from "./research.service.js";
-import { ResearchIntelligenceService } from "./research-intelligence.service.js";
-import { ResearchAccessController } from "./research-access.controller.js";
-import { ResearchAccessService } from "./research-access.service.js";
-import { ResearchSourceService } from "./research-source.service.js";
 import { SettingsController } from "./settings.controller.js";
 import { SettingsService } from "./settings.service.js";
 import { VoiceAuditService } from "./voice-audit.service.js";
@@ -37,23 +34,20 @@ import { WorkflowsService } from "./workflows.service.js";
     MemoryController,
     AgentShellController,
     ExtensionsController,
+    LocalSkillsController,
     ApprovalsController,
     WorkflowsController,
-    VoiceController,
-    ResearchAccessController
+    VoiceController
   ],
   providers: [
     LocalJsonStore,
+    LocalSkillsService,
     SettingsService,
     ChatService,
     MemoryService,
     MemoryIntelligenceService,
     MemoryEmbeddingService,
     MemoryVectorService,
-    ResearchSourceService,
-    ResearchAccessService,
-    ResearchIntelligenceService,
-    ResearchService,
     AgentShellService,
     ExtensionsService,
     ApprovalsService,

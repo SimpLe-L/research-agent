@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn, type ChildProcess } from "node:child_process";
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, dialog, ipcMain } from "electron";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "../../..");
@@ -84,7 +84,8 @@ async function createWindow() {
     title: "SP Agent",
     webPreferences: {
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      preload: resolve(__dirname, "preload.js")
     }
   });
 
@@ -113,6 +114,10 @@ function shutdownApiProcess() {
 }
 
 app.whenReady().then(() => {
+  ipcMain.handle("skills:choose-directory", async () => {
+    const result = await dialog.showOpenDialog({ title: "Choose a Skill folder", properties: ["openDirectory"] });
+    return result.canceled ? undefined : result.filePaths[0];
+  });
   void createWindow();
 });
 

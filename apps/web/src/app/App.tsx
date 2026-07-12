@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { AssistantRuntimeProvider, ThreadListItemPrimitive, ThreadListPrimitive, useAuiState } from "@assistant-ui/react";
 import { Archive, Bot, Menu, MoreHorizontal, PanelLeft, Plus, Share, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -11,44 +11,10 @@ import { SkillCatalog } from "@/components/app/panels/SkillCatalog";
 import { WorkflowReview } from "@/components/app/panels/WorkflowReview";
 import { AssistantThread } from "@/components/app/AssistantThread";
 import { useAgentAssistantRuntime, normalizeThreadTitle } from "./assistant-runtime";
-import { apiBase } from "./api";
-import type { AgentStatus } from "./types";
 import { cn } from "@/lib/utils";
 
 export function App() {
-  const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
-  const [statusText, setStatusText] = useState("Checking runtime");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    async function refreshStatus() {
-      try {
-        const res = await fetch(`${apiBase}/agent/status`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const status = (await res.json()) as AgentStatus;
-        if (cancelled) return;
-        setAgentStatus(status);
-        const runtime = status.piRuntime;
-        if (!runtime?.configured) {
-          setStatusText("Runtime missing key");
-        } else if (!runtime.reachable) {
-          setStatusText("Runtime degraded");
-        } else {
-          setStatusText("Base ready");
-        }
-      } catch {
-        if (!cancelled) {
-          setAgentStatus(null);
-          setStatusText("API unavailable");
-        }
-      }
-    }
-    void refreshStatus();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   const runtime = useAgentAssistantRuntime();
 
@@ -69,8 +35,6 @@ export function App() {
               <ChatHeader
                 sidebarCollapsed={sidebarCollapsed}
                 onToggleSidebar={() => setSidebarCollapsed((value) => !value)}
-                status={agentStatus}
-                statusText={statusText}
               />
               <AssistantThread />
             </section>
@@ -203,16 +167,11 @@ function ThreadTitle() {
 
 function ChatHeader({
   sidebarCollapsed,
-  onToggleSidebar,
-  status,
-  statusText
+  onToggleSidebar
 }: {
   sidebarCollapsed: boolean;
   onToggleSidebar: () => void;
-  status: AgentStatus | null;
-  statusText: string;
 }) {
-  const runtimeLabel = status?.piRuntime?.selectedModel ?? status?.piRuntime?.model ?? status?.piRuntime?.provider ?? "Base";
   return (
     <header className="flex h-13 items-center justify-between gap-2 px-2.5 md:px-4">
       <div className="flex min-w-0 items-center gap-2">
@@ -228,16 +187,7 @@ function ChatHeader({
         <ThreadTitle />
       </div>
       <div className="flex min-w-0 items-center gap-2">
-        <span className="hidden whitespace-nowrap text-xs text-muted-foreground md:inline" data-testid="runtime-label">
-          {runtimeLabel}
-        </span>
-        <span className="hidden whitespace-nowrap text-xs text-muted-foreground md:inline" data-testid="provider-status-button">
-          {statusText}
-        </span>
-        <span className="hidden rounded-full border px-2.5 py-1 text-xs leading-none text-muted-foreground md:inline" data-testid="extension-count">
-          {status?.extensions?.length ?? 0} ext
-        </span>
-        <SkillCatalog initialExtensions={status?.extensions} />
+        <SkillCatalog />
         <WorkflowReview />
         <MemoryReview />
         <ApprovalReview />

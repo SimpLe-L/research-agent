@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -50,6 +50,26 @@ async function main() {
   const agentStatus = await readJson(`${base}/agent/status`);
   assert(agentStatus.mode === "local_personal_agent", "expected local personal agent mode");
 
+  const skillSource = join(dataDir, "skill-fixture");
+  await mkdir(skillSource, { recursive: true });
+  await writeFile(join(skillSource, "SKILL.md"), "---\nname: smoke.local-summary\ndescription: Summarize explicitly supplied text.\nversion: 1.0.0\n---\n\nSummarize only the material supplied by the user. State uncertainty.");
+  const importedSkill = await postJson(`${base}/skills/import`, { sourcePath: skillSource });
+  assert(importedSkill.status === "disabled", "imported local Skill should start disabled");
+  const enabledSkill = await patchJson(`${base}/skills/${encodeURIComponent(importedSkill.id)}/enable`, {});
+  assert(enabledSkill.status === "active", "local Skill should enable");
+  const statusWithSkill = await readJson(`${base}/agent/status`);
+  assert(statusWithSkill.extensions.some((extension) => extension.id === `local.skill.${importedSkill.id}`), "enabled local Skill should appear in runtime catalog");
+  const disabledSkill = await patchJson(`${base}/skills/${encodeURIComponent(importedSkill.id)}/disable`, {});
+  assert(disabledSkill.status === "disabled", "local Skill should disable");
+  const removedSkill = await deleteJson(`${base}/skills/${encodeURIComponent(importedSkill.id)}`);
+  assert(removedSkill.removed === true, "local Skill should remove");
+
+  const upload = new FormData();
+  upload.append("files", new Blob(["---\nname: smoke.uploaded-skill\ndescription: Imported through multipart upload.\n---\n\nUse supplied text only."], { type: "text/markdown" }), "SKILL.md");
+  const uploadedSkill = await postForm(`${base}/skills/import-upload`, upload);
+  assert(uploadedSkill.id === "smoke.uploaded-skill" && uploadedSkill.status === "disabled", "multipart upload should import a SKILL.md-only package");
+  await deleteJson(`${base}/skills/${encodeURIComponent(uploadedSkill.id)}`);
+
   const session = await postJson(`${base}/chat/sessions`, { title: "API smoke" });
   assert(session.id, "expected created chat session id");
 
@@ -85,18 +105,6 @@ async function main() {
   const savedStreamSession = await readJson(`${base}/chat/sessions/${streamSession.id}`);
   assert(savedStreamSession.messages?.length === 2, "expected streamed user and assistant messages to persist");
   await deleteJson(`${base}/chat/sessions/${streamSession.id}`);
-
-  const researchSession = await postJson(`${base}/chat/sessions`, { title: "API research routing smoke" });
-  const researchTurn = await postJson(`${base}/agent/messages`, {
-    content: "帮我调研当前项目的架构，并给出证据和不确定项。",
-    sessionId: researchSession.id
-  });
-  assert(researchTurn.toolCalls?.some((call) => call.toolName === "personal_research_research_run"), "research intent should route to the research capability");
-  assert(researchTurn.artifacts?.length === 1 && researchTurn.artifacts[0].kind === "research_report", "research intent should return one research artifact");
-  assert(researchTurn.artifacts[0].report.evidence.length >= 0, "research artifact should include a report");
-  const savedResearchSession = await readJson(`${base}/chat/sessions/${researchSession.id}`);
-  assert(savedResearchSession.messages?.[1]?.metadata?.artifacts?.[0]?.kind === "research_report", "research artifact should persist with the assistant message");
-  await deleteJson(`${base}/chat/sessions/${researchSession.id}`);
 
   await stopApi();
   console.log(
@@ -140,6 +148,20 @@ async function postJson(url, body) {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body)
   });
+  const data = await response.json();
+  assert(response.ok, `${url} returned HTTP ${response.status}: ${data.message ?? "unknown error"}`);
+  return data;
+}
+
+async function patchJson(url, body) {
+  const response = await fetch(url, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  const data = await response.json();
+  assert(response.ok, `${url} returned HTTP ${response.status}: ${data.message ?? "unknown error"}`);
+  return data;
+}
+
+async function postForm(url, body) {
+  const response = await fetch(url, { method: "POST", body });
   const data = await response.json();
   assert(response.ok, `${url} returned HTTP ${response.status}: ${data.message ?? "unknown error"}`);
   return data;

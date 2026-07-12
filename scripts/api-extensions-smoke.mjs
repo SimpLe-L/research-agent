@@ -46,6 +46,7 @@ try {
   }
 
   const registry = await getJson(`${base}/extensions`);
+  assert(registry.safetyModel?.defaultToolPolicy === "trusted_local", "expected trusted-local default tool policy");
   const context = registry.extensions.find((extension) => extension.id === "local.context");
   assert(context?.status === "active", "expected active local.context extension");
   assert(context.capabilities.some((capability) => capability.id === "context.snapshot"), "expected context.snapshot capability");
@@ -81,34 +82,13 @@ try {
   assert(Array.isArray(briefing.result?.extensionSummary?.extensions), "context briefing should include extension details");
   assert(typeof briefing.result?.workflowSummary?.total === "number", "context briefing should include workflow summary");
 
-  const pending = await postJson(`${base}/extensions/local.memory/invoke`, {
+  const completedWrite = await postJson(`${base}/extensions/local.memory/invoke`, {
     capabilityId: "memory.write_candidate",
     input: { content: "extension approval smoke", source: { type: "system" } }
   });
-  assert(pending.status === "pending_approval", "write extension should request approval");
-  assert(pending.approval?.status === "pending", "write extension should return pending approval");
-
-  const approved = await patchJson(`${base}/approvals/${pending.approval.id}`, {
-    decision: "approved",
-    reason: "Extension smoke approval."
-  });
-  assert(approved.approval?.status === "approved", "approval request should be approved");
-  await expectPostFailure(
-    `${base}/extensions/local.memory/invoke`,
-    {
-      capabilityId: "memory.write_candidate",
-      input: { ...pending.approval.input, content: "tampered approval input" },
-      approvalId: pending.approval.id
-    },
-    400
-  );
-  const completedWrite = await postJson(`${base}/extensions/local.memory/invoke`, {
-    capabilityId: "memory.write_candidate",
-    input: pending.approval.input,
-    approvalId: pending.approval.id
-  });
-  assert(completedWrite.status === "completed", "approved write extension should execute");
-  assert(completedWrite.result?.memory?.content === "extension approval smoke", "approved write should create the memory candidate");
+  assert(completedWrite.status === "completed", "trusted-local memory write should execute directly");
+  assert(completedWrite.permissionAudit?.mode === "read_only", "trusted-local memory write should not require approval");
+  assert(completedWrite.result?.memory?.content === "extension approval smoke", "trusted-local write should create the memory candidate");
 
   const projectSearch = await postJson(`${base}/extensions/local.project/invoke`, {
     capabilityId: "project.search_docs",

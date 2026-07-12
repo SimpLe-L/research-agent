@@ -1,10 +1,9 @@
 import { Type } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 
-type AgentArtifact = { kind: "research_report"; workflowId: string; report: any };
+type AgentArtifact = { kind: string; [key: string]: unknown };
 type ExtensionCapability = { id: string; label: string; description: string; inputSchema?: string };
 type ExtensionManifest = { id: string; status: string; capabilities: ExtensionCapability[] };
-type ResearchReport = { id: string; workflowId: string; answer: string; uncertainty: string[]; openQuestions: string[]; [key: string]: unknown };
 
 type PiSdkModule = typeof import("@earendil-works/pi-coding-agent");
 type PiModelRegistry = {
@@ -105,8 +104,6 @@ const localDeterministicRuntimeAdapter: RuntimeAdapter = {
     reachable: true
   }),
   runTurn: async (input) => {
-    const routed = await runDeterministicSkillRoute(input);
-    if (routed) return routed;
     return {
       content:
         `本地确定性 runtime 已接管本轮回复。收到用户消息：${truncateForReply(input.message)}\n` +
@@ -142,72 +139,6 @@ export function getSelectedRuntimeAdapter(env: NodeJS.ProcessEnv = process.env):
 function truncateForReply(value: string) {
   const clean = value.replace(/\s+/g, " ").trim();
   return clean.length > 80 ? `${clean.slice(0, 80)}...` : clean;
-}
-
-function isResearchIntent(message: string) {
-  return /调研|研究|比较|对比|查证|核实|证据|资料|research|compare|verify|evidence/i.test(message);
-}
-
-async function runDeterministicSkillRoute(input: PersonalAgentTurnInput): Promise<PersonalAgentTurnResult | undefined> {
-  if (!isResearchIntent(input.message) || !input.extensionInvoker || !hasCapability(input.extensionManifests, "personal.research", "research.run")) return undefined;
-  const response = await input.extensionInvoker({
-    extensionId: "personal.research",
-    capabilityId: "research.run",
-    input: {
-      question: input.message,
-      sessionId: input.sessionId,
-      sourceScopes: ["local_documents", "bookmarks"],
-      reportFormat: "brief",
-      strategy: "deterministic"
-    }
-  });
-  const artifact = researchArtifactFromResult("personal.research", "research.run", response.result);
-  if (!artifact) {
-    return {
-      content: response.degradedReason ? `无法完成本次调研：${response.degradedReason}` : "本次调研未生成可核验的报告。",
-      provider: "local-deterministic",
-      model: "deterministic-skill-router-v1",
-      degradedReason: response.degradedReason,
-      activeTools: [capabilityToolName("personal.research", "research.run")],
-      toolCalls: [{ toolName: capabilityToolName("personal.research", "research.run"), input: { question: input.message }, isError: !response.ok }],
-      artifacts: []
-    };
-  }
-  const { report } = artifact;
-  const webSearchTool = capabilityToolName("personal.research", "research.search_web");
-  if (report.metrics?.citedClaimCount === 0 && hasCapability(input.extensionManifests, "personal.research", "research.search_web")) {
-    const webSearch = await input.extensionInvoker({
-      extensionId: "personal.research",
-      capabilityId: "research.search_web",
-      input: { question: input.message, sessionId: input.sessionId, maxResults: 5 }
-    });
-    if (webSearch.status === "pending_approval") {
-      return {
-        content: `${report.answer}\n\n本地资料不足，已请求批准使用网页搜索补充可引用证据。批准后会生成新的调研报告。`,
-        provider: "local-deterministic",
-        model: "deterministic-skill-router-v1",
-        activeTools: [capabilityToolName("personal.research", "research.run"), webSearchTool],
-        toolCalls: [
-          { toolName: capabilityToolName("personal.research", "research.run"), input: { question: input.message }, isError: false },
-          { toolName: webSearchTool, input: { question: input.message }, isError: false, outputPreview: "Approval requested for remote web search." }
-        ],
-        artifacts: [artifact]
-      };
-    }
-  }
-  const uncertainty = report.uncertainty[0] ?? report.openQuestions[0];
-  return {
-    content: `${report.answer}${uncertainty ? `\n\n不确定项：${uncertainty}` : ""}`,
-    provider: "local-deterministic",
-    model: "deterministic-skill-router-v1",
-    activeTools: [capabilityToolName("personal.research", "research.run")],
-    toolCalls: [{ toolName: capabilityToolName("personal.research", "research.run"), input: { question: input.message }, isError: false }],
-    artifacts: [artifact]
-  };
-}
-
-function hasCapability(manifests: unknown[] | undefined, extensionId: string, capabilityId: string) {
-  return readOnlyCapabilities(manifests).some(({ manifest, capability }) => manifest.id === extensionId && capability.id === capabilityId);
 }
 
 function sanitizeVisibleAgentContent(content: string): string {
@@ -397,8 +328,6 @@ async function runPiPersonalAgentTurn(
   const modelLabel = `${provider}/${modelId}`;
 
   if (!piHasApiKey(provider, env)) {
-    const routed = await runDeterministicSkillRoute(input);
-    if (routed) return { ...routed, provider: "pi", model: modelLabel, degradedReason: `AGENT_RUNTIME_PROVIDER=pi requires SILICONFLOW_API_KEY for the configured Pi model provider (${provider}); deterministic skill routing was used.` };
     return {
       content:
         "本地个人 agent 基座已启动。当前缺少 Pi 模型密钥，所以这次使用确定性降级回复；你仍然可以继续搭建 memory、speech 和 skills 边界。",
@@ -510,13 +439,6 @@ async function* streamPiPersonalAgentTurn(
   const modelLabel = `${provider}/${modelId}`;
 
   if (!piHasApiKey(provider, env)) {
-    const routed = await runDeterministicSkillRoute(input);
-    if (routed) {
-      const result = { ...routed, provider: "pi", model: modelLabel, degradedReason: `AGENT_RUNTIME_PROVIDER=pi requires SILICONFLOW_API_KEY for the configured Pi model provider (${provider}); deterministic skill routing was used.` };
-      for (const text of chunkText(result.content)) yield { type: "text_delta", text };
-      yield { type: "done", result };
-      return;
-    }
     const result: PersonalAgentTurnResult = {
       content: "本地个人 agent 基座已启动。当前缺少 Pi 模型密钥，所以这次使用确定性降级回复；你仍然可以继续搭建 memory、speech 和 skills 边界。",
       provider: "pi",
@@ -700,8 +622,6 @@ function createCapabilityTools(input: PersonalAgentTurnInput, artifacts: AgentAr
         return toolFailure({ ok: false, status: "denied", degradedReason: "The API shell did not provide an extension invoker." });
       }
       const result = await input.extensionInvoker({ extensionId: manifest.id, capabilityId: capability.id, input: extensionInput.value });
-      const artifact = researchArtifactFromResult(manifest.id, capability.id, result.result);
-      if (artifact) artifacts.push(artifact);
       return {
         content: [{ type: "text", text: truncateJson(redactLargeExtensionResult(result), 12000) }],
         details: { ok: result.ok, status: result.status, extensionId: manifest.id, capabilityId: capability.id }
@@ -729,14 +649,6 @@ function capabilityToolName(extensionId: string, capabilityId: string) {
   return `${extensionId}_${capabilityId}`.replace(/[^a-zA-Z0-9_]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 64);
 }
 
-function researchArtifactFromResult(extensionId: string, capabilityId: string, result: unknown): AgentArtifact | undefined {
-  if (extensionId !== "personal.research" || capabilityId !== "research.run") return undefined;
-  const record = result as { workflow?: { id?: string; result?: unknown } } | undefined;
-  const report = record?.workflow?.result as ResearchReport | undefined;
-  if (!record?.workflow?.id || !report?.id || report.workflowId !== record.workflow.id) return undefined;
-  return { kind: "research_report", workflowId: record.workflow.id, report };
-}
-
 function buildPiAgentShellPrompt(input: PersonalAgentTurnInput): string {
   const capabilities = readOnlyCapabilities(input.extensionManifests).map(({ manifest, capability }) => ({
     toolName: capabilityToolName(manifest.id, capability.id),
@@ -748,14 +660,13 @@ function buildPiAgentShellPrompt(input: PersonalAgentTurnInput): string {
   }));
   return JSON.stringify({
     instruction:
-      "You are the Pi runtime for a local-first single-user personal Agent OS. Reply in concise Chinese. Use provided memoryContext silently as background context. Decide independently whether an available capability is needed; do not ask the user to select a skill. For research, comparison, verification, evidence, or source-grounded questions, call personal_research_research_run_provider_assisted first with { question: userMessage, sessionId, maxSources: 10, maxWebResults: 5, reportFormat: brief }. This proposal creates an approval request and does not access a model or network until the user approves it. After approval, the API model plans only from registered source scopes, gathers permitted evidence, and validates citations before returning a report. Do not claim remote evidence before a completed report exists. Do not mention tools, internal steps, or tool-call counts unless asked for debug details. Never request private keys or suggest wallet transactions, swaps, transfers, posting automation, shell, file-write, browser-control, or unrestricted provider actions. Keep the response under 10 lines.",
+      "You are the Pi runtime for a trusted local development agent. Reply in concise Chinese. Select an available Skill only when it materially helps the request; otherwise answer directly. For a local.skill capability, load its instructions before following it, then read package references only when needed. Treat declared API tools as the Skill's allowlist. Do not claim unavailable tool results, external data, or memory. Do not mention internal tools unless asked. Keep the response under 10 lines.",
     userMessage: input.message,
     sessionId: input.sessionId,
-    memoryContext: input.memoryContext ?? [],
     availableAppTools: ["inspect_extension_registry: read local extensions and safety policy only", ...capabilities.map((item) => `${item.toolName}: ${item.label}`)],
     availableCapabilities: capabilities,
     extensionInvocationPolicy:
-      "Only API-allowed capability invocations may run. Shell/file/browser/wallet/posting actions are unavailable in this v0.x path.",
+      "Use only the capabilities exposed by the local API. Sensitive credentials, external account actions, and destructive operations remain approval-gated.",
     extensionCount: input.extensionManifests?.length ?? 0
   });
 }

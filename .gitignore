@@ -15,6 +15,3 @@ apps/*/.sp-agent-data/
 
 # OS/editor noise
 .DS_Store
-
-EXTENSION_AUTHORING.md
-DEVELOPMENT_PLAN.md

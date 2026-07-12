@@ -12,13 +12,6 @@ import {
   projectPlanSchema,
   promoteMemorySchema,
   projectDocSearchSchema,
-  researchFetchWebSourceSchema,
-  researchBriefingSchema,
-  researchGetReportSchema,
-  researchImportSourceSchema,
-  researchProviderRunSchema,
-  researchRequestSchema,
-  researchWebSearchSchema,
   searchMemorySchema,
   type ExtensionCapability,
   type ExtensionInvocationAudit,
@@ -28,8 +21,6 @@ import {
 import { ApprovalsService } from "./approvals.service.js";
 import { LocalJsonStore } from "./local-json-store.service.js";
 import { MemoryService } from "./memory.service.js";
-import { ResearchSourceService } from "./research-source.service.js";
-import { ResearchAccessService } from "./research-access.service.js";
 import { WorkflowsService } from "./workflows.service.js";
 
 type ExtensionInvocationResponse = {
@@ -56,8 +47,6 @@ export class ExtensionsService {
     @Inject(MemoryService) private readonly memoryService: MemoryService,
     @Inject(ApprovalsService) private readonly approvalsService: ApprovalsService,
     @Inject(WorkflowsService) private readonly workflowsService: WorkflowsService,
-    @Inject(ResearchSourceService) private readonly researchSourceService: ResearchSourceService,
-    @Inject(ResearchAccessService) private readonly researchAccessService: ResearchAccessService,
     @Inject(LocalJsonStore) private readonly store: LocalJsonStore
   ) {
     this.handlers = [
@@ -154,81 +143,6 @@ export class ExtensionsService {
           )
       },
       {
-        extensionId: "personal.research",
-        capabilityId: "research.run",
-        handle: async (request, audit) =>
-          this.completed(
-            "personal.research",
-            "research.run",
-            audit,
-            await this.workflowsService.runResearch(researchRequestSchema.parse(request.input))
-          )
-      },
-      {
-        extensionId: "personal.briefing",
-        capabilityId: "briefing.recent_research",
-        handle: async (request, audit) => {
-          const input = researchBriefingSchema.parse(request.input);
-          return this.completed("personal.briefing", "briefing.recent_research", audit, await this.workflowsService.recentResearchBriefing(input.limit));
-        }
-      },
-      {
-        extensionId: "personal.research",
-        capabilityId: "research.import_source",
-        handle: async (request, audit) => {
-          const approval = await this.ensureApproved(request, audit, "Import user-provided research content into the local source store.");
-          if (!approval.approved) return approval.response;
-          const result = await this.researchSourceService.importUserSource(researchImportSourceSchema.parse(request.input));
-          return this.completedAfterApproval(approval.approval, "personal.research", "research.import_source", audit, result);
-        }
-      },
-      {
-        extensionId: "personal.research",
-        capabilityId: "research.fetch_web_source",
-        handle: async (request, audit) => {
-          const approval = await this.ensureApproved(request, audit, "Fetch one allowlisted remote research source and retain its provenance locally.");
-          if (!approval.approved) return approval.response;
-          const result = await this.researchSourceService.fetchWebSource(researchFetchWebSourceSchema.parse(request.input));
-          return this.completedAfterApproval(approval.approval, "personal.research", "research.fetch_web_source", audit, result);
-        }
-      },
-      {
-        extensionId: "personal.research",
-        capabilityId: "research.search_web",
-        handle: async (request, audit) => {
-          const input = researchWebSearchSchema.parse(request.input);
-          const approval = await this.ensureApproved(request, audit, "Search the web with the configured Tavily connector and create a cited research report.");
-          if (!approval.approved) return approval.response;
-          await this.enableRemoteResearchAccess(approval.approval);
-          const result = await this.workflowsService.runWebResearch(input);
-          return this.completedAfterApproval(approval.approval, "personal.research", "research.search_web", audit, result);
-        }
-      },
-      {
-        extensionId: "personal.research",
-        capabilityId: "research.run_provider_assisted",
-        handle: async (request, audit) => {
-          const input = researchProviderRunSchema.parse(request.input);
-          const approval = await this.ensureApproved(
-            request,
-            audit,
-            "Send this question and the collected evidence to the configured model for research planning and cited synthesis; the plan may use the approved Tavily web-search connector."
-          );
-          if (!approval.approved) return approval.response;
-          await this.enableRemoteResearchAccess(approval.approval);
-          const result = await this.workflowsService.runProviderAssistedResearch(input);
-          return this.completedAfterApproval(approval.approval, "personal.research", "research.run_provider_assisted", audit, result);
-        }
-      },
-      {
-        extensionId: "personal.research",
-        capabilityId: "research.get_report",
-        handle: async (request, audit) => {
-          const input = researchGetReportSchema.parse(request.input);
-          return this.completed("personal.research", "research.get_report", audit, await this.workflowsService.getResearchReport(input.workflowId));
-        }
-      },
-      {
         extensionId: "local.project",
         capabilityId: "project.plan",
         handle: async (request, audit) =>
@@ -285,7 +199,7 @@ export class ExtensionsService {
     const audit = buildPermissionAudit(id, requestedCapabilityId, findCapability(extension.capabilities, requestedCapabilityId));
 
     const handler = this.handlers.find((item) => item.extensionId === id && item.capabilityId === requestedCapabilityId);
-    if (handler) return handler.handle({ ...request, input: parseExtensionCapabilityInput(id, requestedCapabilityId, request.input) }, audit);
+    if (handler) return handler.handle({ ...request, input: parseExtensionCapabilityInput(id, requestedCapabilityId, request.input) as Record<string, unknown> }, audit);
 
     if (id === "local.speech") {
       return {
@@ -324,9 +238,6 @@ export class ExtensionsService {
 
   private async ensureApproved(request: InvokeExtensionInput, audit: ExtensionInvocationAudit, reason: string) {
     if (audit.mode === "read_only") return { approved: true as const, approval: undefined };
-    if (isAutoApprovedRemoteResearch(audit) && await this.researchAccessService.isEnabled()) {
-      return { approved: true as const, approval: undefined };
-    }
     if (request.approvalId) {
       const approved = await this.approvalsService.requireApprovedFor(request.approvalId, {
         extensionId: audit.extensionId,
@@ -360,10 +271,6 @@ export class ExtensionsService {
         degradedReason: "Capability requires explicit approval before execution."
       }
     };
-  }
-
-  private async enableRemoteResearchAccess(approval: { id: string } | undefined) {
-    if (approval) await this.researchAccessService.enableFromApproval(approval.id);
   }
 
   private async searchLocalBookmarks(input: { query: string; limit: number }) {
@@ -529,14 +436,16 @@ function buildPermissionAudit(extensionId: string, capabilityId: string, capabil
     };
   }
   const permissions = capability.permissions ?? [];
-  const writeOrProvider = permissions.some((permission) => {
+  const requiresApproval = permissions.some((permission) => {
     const normalized = permission.toLowerCase();
     return (
-      normalized.includes("write") ||
-      normalized.includes("provider") ||
-      normalized.includes("audio:") ||
-      normalized.includes("transcribe") ||
-      normalized.includes("synthesize")
+      normalized.includes("credential") ||
+      normalized.includes("secret") ||
+      normalized.includes("private_key") ||
+      normalized.includes("external:write") ||
+      normalized.includes("account:") ||
+      normalized.includes("payment") ||
+      normalized.includes("destructive")
     );
   });
   return {
@@ -544,21 +453,14 @@ function buildPermissionAudit(extensionId: string, capabilityId: string, capabil
     capabilityId,
     permissions,
     allowed: true,
-    mode: writeOrProvider ? "write_or_provider" : "read_only",
-    reason: writeOrProvider ? "Capability may create state, use provider resources, or process audio." : "Capability is read-only."
+    mode: requiresApproval ? "write_or_provider" : "read_only",
+    reason: requiresApproval ? "Capability can access secrets, create an external account action, or perform a destructive operation." : "Trusted local capability is allowed to run directly."
   };
 }
 
 function requiredString(value: unknown, name: string) {
   if (typeof value !== "string" || !value.trim()) throw new BadRequestException(`${name} is required`);
   return value;
-}
-
-function isAutoApprovedRemoteResearch(audit: ExtensionInvocationAudit) {
-  return (
-    audit.extensionId === "personal.research" &&
-    (audit.capabilityId === "research.search_web" || audit.capabilityId === "research.run_provider_assisted")
-  );
 }
 
 function tokenize(value: string) {

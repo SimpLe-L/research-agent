@@ -1,35 +1,38 @@
 # SP Agent
 
-SP Agent is a local-first desktop Research and Decision Agent built on a reusable, permissioned agent platform. It helps a user collect explicitly allowed evidence, inspect conflicting or insufficient information, and produce cited conclusions without silently retaining personal facts or taking external action.
+SP Agent is a local-first desktop agent built around chat-native Skills. In the first phase, a user chats normally, the model can select an enabled local Skill when it helps, and the API controls all tool execution and permissions. `personal.research` is the first reference Skill.
 
-The first flagship skill is `personal.research`. A user stays in the normal chat composer: the Agent decides when an active read-only Skill is useful, invokes it through the typed extension boundary, and returns an inspectable artifact in the reply. The platform underneath remains general: every capability enters through a typed extension boundary, while the local API owns memory, approval, workflows, persistence, provider readiness, and audit.
+The goal is closer to a coding-agent Skill model than a fixed orchestration pipeline: no mandatory planner service, no mandatory connector layer, and no per-Skill launcher UI.
 
-## Architecture
-
-```text
-Electron desktop shell
--> React chat-first renderer
--> NestJS local API control plane
--> replaceable agent runtime
--> permissioned extensions and connectors
--> app-owned memory, approvals, workflows, and speech
-```
-
-Agent runtimes can propose typed capabilities but cannot directly use shell, filesystem-write, browser-control, wallet, or posting tools. Sensitive writes, imports, external actions, new data scopes, and provider data egress require an explicit scoped approval or revocable policy; durable memory is reversible and auditable.
-
-## Research And Decision Workflow
+## First-Phase Flow
 
 ```text
-Chat request
--> Planner selects ordinary chat, local grounding, or a research Skill
--> Selected Skill declares evidence requirements and eligible Connectors
--> API validates scope, budget, policy, and invokes Connectors
--> Model synthesizes from collected evidence when research is required
--> Produce a cited report with uncertainty
--> Optionally request approval to promote a conclusion to memory
+Chat message
+-> runtime answers directly or selects an enabled Skill
+-> API validates the Skill and loads its instructions
+-> runtime requests only allowed typed API tools
+-> API executes and audits tools
+-> assistant returns the result in chat
 ```
 
-The initial release is local-first: allowlisted project documents, local bookmarks, and user-provided sources. Remote retrieval is added only through scoped, read-only connectors with provenance, explicit policy, and degraded states. Skill catalog, workflow, memory, and approval panels are for discovery and review; future Skills do not add new required launch buttons.
+Third-party Skills are imported as complete local packages. They may contain workflow instructions, references, templates, static assets, and scripts; importing never executes package code. Trusted-local API capabilities perform normal local writes and provider calls directly, while credentials, external account actions, payments, and irreversible destructive operations remain approval-gated.
+
+## Skill Package
+
+```text
+my-skill/
+  SKILL.md
+  assets/
+  skill.json              # optional app-specific metadata
+```
+
+`SKILL.md` is enough to import a Codex-style Skill: its front matter declares identity and description. `skill.json` is optional metadata for typed input, requested API tools, and artifacts. Import a local directory by choosing or dropping it in the Skill panel; the importer validates and hashes the package, stages a copy in local app data, and records import/enablement actions in the audit log. See [EXTENSION_AUTHORING.md](EXTENSION_AUTHORING.md).
+
+## Deferred Until The Base Is Solid
+
+- runtime memory retrieval or durable memory promotion;
+- automatic package hooks and a marketplace;
+- multi-agent orchestration and LangGraph.
 
 ## Workspace
 
@@ -37,7 +40,7 @@ The initial release is local-first: allowlisted project documents, local bookmar
 - `apps/web`: React and assistant-ui chat shell.
 - `apps/desktop`: Electron shell and API process orchestration.
 - `packages/shared`: Zod schemas and shared contracts.
-- `packages/extensions`: extension and connector registry.
+- `packages/extensions`: built-in tools, Skill package validation, and permission metadata.
 - `packages/agent-runtime`: replaceable runtime adapters; Pi is the default.
 - `packages/speech`: STT/TTS contracts and adapters.
 
@@ -49,13 +52,11 @@ pnpm build
 pnpm dev
 ```
 
-For the desktop shell, run:
+For the desktop shell:
 
 ```bash
 pnpm dev:desktop
 ```
-
-Pi uses SiliconFlow configuration when a key is available. Without credentials, the application stays usable in deterministic degraded mode for boundary and UI verification.
 
 ## Verification
 
@@ -64,16 +65,14 @@ pnpm typecheck
 pnpm build
 pnpm smoke:api
 pnpm smoke:extensions
-pnpm smoke:memory
-pnpm smoke:workflows
+pnpm smoke:runtime
 pnpm smoke:web
 ```
 
-The deterministic suite does not require a live provider. Refer to [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md) for the milestone sequence, evaluation requirements, and the portfolio definition of done.
-
 ## Safety Boundaries
 
-- No private-key handling, transactions, posting automation, unrestricted shell, filesystem-write, or browser-control tools.
-- Source evidence retains provenance, excerpt/locator, retrieval time, confidence, and visible degraded state.
-- Durable memory promotion requires approval and maintains audit history, conflict metadata, and tombstone-based forgetting.
-- Raw audio is not persisted by default.
+- No private-key handling. Transactions, posting automation, payments, credential use, and irreversible destructive operations remain approval-gated.
+- Imported Skill packages are instructions and static assets, never executable code in phase one.
+- Every executable capability has a typed API contract and permission audit.
+- Trusted-local writes and provider calls execute directly. Credentials, external account actions, payments, private keys, and irreversible destructive operations require explicit approval.
+- Missing tools or unavailable providers are reported as degraded states; they are never fabricated.
